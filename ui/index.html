@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Mobilix</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="aurora"><i></i><i></i><i></i></div>
+
+<div id="app">
+  <header id="top">
+    <div class="tl">
+      <button id="btnExit" class="sq" title="Выход">
+        <svg viewBox="0 0 24 24"><path d="M13 4h7v16h-7"/><path d="M17 12H3.5M8 7.5 3.5 12 8 16.5"/></svg>
+      </button>
+      <button id="btnLog" class="sq">Лог</button>
+    </div>
+    <div id="title"><div class="logo">Mobilix</div><div id="verLabel"></div></div>
+  </header>
+
+  <main id="stage">
+    <section id="skinCard" class="card">
+      <div id="skinView"></div>
+      <div id="ground"></div>
+      <div id="nickLabel"></div>
+      <div id="logWin" class="hidden">
+        <div class="lhead">
+          <button class="ltab on" id="tabLatest"></button>
+          <button class="ltab" id="tabPrev"></button>
+          <button class="ltab" id="tabCopy"></button>
+          <button class="ltab hidden" id="tabStop"></button>
+          <span class="lsp"></span>
+          <button class="ltab" id="tabClose">✕</button>
+        </div>
+        <pre id="logText"></pre>
+      </div>
+    </section>
+  </main>
+
+  <footer id="bottom">
+    <div id="dockSlot"></div>
+    <div id="playGroup">
+      <div id="statusRow"><span id="stText"></span><span id="stPct"></span></div>
+      <div id="progress"><i></i></div>
+      <div id="actRow">
+        <div class="vrow">
+          <button class="vbtn" id="verBtn"></button>
+          <button class="varrow" id="verArrow">▲</button>
+          <div class="popup hidden" id="verPopup"></div>
+        </div>
+        <button id="playBtn"></button>
+      </div>
+    </div>
+  </footer>
+</div>
+
+<div id="hint"></div>
+<div id="hot"></div>
+<div id="scrim"></div>
+<aside id="drawer"></aside>
+<div id="pageLayer" class="hidden"></div>
+<div id="modalLayer" class="hidden"></div>
+
+<script src="icons.js"></script>
+<script src="skin3d.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

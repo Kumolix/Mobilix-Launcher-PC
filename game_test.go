@@ -1,0 +1,48 @@
+package main
+
+import "testing"
+
+func TestOfflineUUID(t *testing.T) {
+	// известное значение для офлайн-игрока "Notch" в Minecraft
+	if got := offlineUUID("Notch"); got != "b50ad385-829d-3141-a216-7e7d7539ba7f" {
+		t.Fatalf("uuid %s", got)
+	}
+}
+
+func TestMavenPath(t *testing.T) {
+	p, ok := mavenPath("net.fabricmc:fabric-loader:0.16.9")
+	if !ok || p != "net/fabricmc/fabric-loader/0.16.9/fabric-loader-0.16.9.jar" {
+		t.Fatal(p)
+	}
+	p, _ = mavenPath("org.lwjgl:lwjgl:3.3.3:natives-windows")
+	if p != "org/lwjgl/lwjgl/3.3.3/lwjgl-3.3.3-natives-windows.jar" {
+		t.Fatal(p)
+	}
+}
+
+func TestRules(t *testing.T) {
+	win := []Rule{{Action: "allow"}, {Action: "disallow", OS: &OSRule{Name: "osx"}}}
+	if !rulesOK(win, nil) {
+		t.Fatal("allow all except osx")
+	}
+	only := []Rule{{Action: "allow", OS: &OSRule{Name: "osx"}}}
+	if rulesOK(only, nil) {
+		t.Fatal("osx only must be rejected")
+	}
+	demo := []Rule{{Action: "allow", Features: map[string]bool{"is_demo_user": true}}}
+	if rulesOK(demo, map[string]bool{}) {
+		t.Fatal("demo feature must be rejected")
+	}
+}
+
+func TestCleanNick(t *testing.T) {
+	if cleanNick("a b") != "Player" || cleanNick("Привет") != "Player" || cleanNick(" Steve_01 ") != "Steve_01" {
+		t.Fatal("nick")
+	}
+}
+
+func TestJavaOK(t *testing.T) {
+	if javaOK(8, 17) || !javaOK(8, 8) || !javaOK(17, 21) || javaOK(21, 17) {
+		t.Fatal("java compat")
+	}
+}
