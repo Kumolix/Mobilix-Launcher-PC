@@ -1116,7 +1116,7 @@ func (a *App) launch(v *Version, s Settings, java string) error {
 	full := append(append(append(args, jvm...), v.MainClass), game...)
 	a.lg.add("[Mobilix] " + a.tr("Java: ", "Java: ") + java)
 	a.lg.add("[Mobilix] " + a.tr("Папка игры: ", "Game folder: ") + gdir)
-	cmd := exec.Command(java, full...)
+	cmd := exec.Command(gameJava(java), full...)
 	cmd.Dir = gdir
 	hideWindow(cmd)
 	stdout, _ := cmd.StdoutPipe()
@@ -1320,4 +1320,16 @@ func untargz(src, dest string) error {
 			}
 		}
 	}
+}
+
+// gameJava на Windows запускает игру через javaw.exe (процесс без консоли, как в официальном лаунчере).
+func gameJava(java string) string {
+	if runtime.GOOS != "windows" {
+		return java
+	}
+	w := filepath.Join(filepath.Dir(java), "javaw.exe")
+	if st, err := os.Stat(w); err == nil && !st.IsDir() {
+		return w
+	}
+	return java
 }
