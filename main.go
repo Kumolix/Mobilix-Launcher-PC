@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -386,6 +387,8 @@ type runInfo struct {
 	Token string `json:"token"`
 }
 
+func init() { runtime.LockOSThread() }
+
 func main() {
 	dir := os.Getenv("MOBILIX_DATA")
 	if dir == "" {
@@ -399,14 +402,16 @@ func main() {
 	a := &App{dataDir: dir, lg: newLogger()}
 	a.loadSettings()
 
-	// второй запуск: просто открыть окно уже работающего лаунчера
+	// второй запуск: поднять окно уже работающего лаунчера и выйти
 	if b, err := os.ReadFile(a.path("run.json")); err == nil {
 		var ri runInfo
 		if json.Unmarshal(b, &ri) == nil && ri.Port > 0 {
 			if c, err := net.DialTimeout("tcp", "127.0.0.1:"+itoa(ri.Port), 600*time.Millisecond); err == nil {
 				_ = c.Close()
-				a.token = ri.Token
-				a.openWindow("127.0.0.1:" + itoa(ri.Port))
+				if !focusWindow() {
+					a.token = ri.Token
+					a.openWindow("127.0.0.1:" + itoa(ri.Port))
+				}
 				return
 			}
 		}
@@ -427,17 +432,19 @@ func main() {
 	_ = os.WriteFile(a.path("run.json"), rb, 0o644)
 	a.lg.add("[Mobilix] PC " + appVersion)
 	go a.checkUpdate()
-	go a.watchdog()
-	go func() {
-		if os.Getenv("MOBILIX_NOWINDOW") == "" {
-			a.openWindow(fmt.Sprintf("127.0.0.1:%d", a.port))
-		}
-	}()
 	srv := &http.Server{Handler: a.routes()}
+	go func() { _ = srv.Serve(ln) }()
+	addr := fmt.Sprintf("127.0.0.1:%d", a.port)
 	if os.Getenv("MOBILIX_NOWINDOW") != "" {
-		fmt.Printf("http://127.0.0.1:%d/?k=%s\n", a.port, a.token)
+		fmt.Printf("http://%s/?k=%s\n", addr, a.token)
+		select {}
 	}
-	_ = srv.Serve(ln)
+	// собственное окно (WebView2 внутри exe); если не вышло, окно браузера в режиме приложения
+	if a.runNative(fmt.Sprintf("http://%s/?k=%s", addr, a.token)) {
+		a.shutdown()
+	}
+	a.openWindow(addr)
+	a.watchdog()
 }
 
 func (a *App) checkUpdate() {

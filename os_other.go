@@ -39,3 +39,8 @@ func killTree(pid int) {
 		_ = p.Kill()
 	}
 }
+
+// На Linux своё окно не встроено: используется окно браузера в режиме приложения.
+func (a *App) runNative(url string) bool { return false }
+
+func focusWindow() bool { return false }
