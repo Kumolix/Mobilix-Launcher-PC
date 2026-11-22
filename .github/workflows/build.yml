@@ -2,7 +2,10 @@ name: build
 on:
   push:
     branches: [main]
+    tags: ['v*']
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -11,10 +14,6 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.24'
-      - name: Dependencies
-        run: |
-          go get github.com/jchv/go-webview2@latest
-          go mod tidy
       - name: Test
         run: |
           go vet ./...
@@ -24,13 +23,25 @@ jobs:
         run: |
           go install github.com/tc-hib/go-winres@latest
           "$(go env GOPATH)/bin/go-winres" make --in winres/winres.json --out rsrc
+          (cd installer && "$(go env GOPATH)/bin/go-winres" make --in winres/winres.json --out rsrc)
       - name: Build
+        env:
+          CF_KEY: ${{ secrets.CURSEFORGE_API }}
         run: |
           mkdir dist
-          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -H=windowsgui" -o dist/Mobilix-Launcher.exe .
+          LD="-s -w -H=windowsgui -X main.cfKey=${CF_KEY}"
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$LD" -o dist/Mobilix-Launcher.exe .
           rm -f rsrc_windows_*.syso
-          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o dist/Mobilix-Launcher-linux-x64 .
+          cp dist/Mobilix-Launcher.exe installer/payload.exe
+          (cd installer && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -tags installer -ldflags "-s -w -H=windowsgui" -o ../dist/Mobilix-Launcher-Setup.exe .)
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.cfKey=${CF_KEY}" -o dist/Mobilix-Launcher-linux-x64 .
+          cd dist && sha256sum * > SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
           name: Mobilix-Launcher-PC
           path: dist/*
+      - name: Release (only for pushed v* tags)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*

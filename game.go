@@ -3,7 +3,6 @@ package main
 import (
 	"archive/tar"
 	"archive/zip"
-	"bufio"
 	"compress/gzip"
 	"context"
 	"crypto/md5"
@@ -14,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -28,7 +28,48 @@ import (
 	"time"
 )
 
-var httpc = &http.Client{Timeout: 0}
+var httpc = &http.Client{Timeout: 0, Transport: &http.Transport{
+	Proxy:                 http.ProxyFromEnvironment,
+	DialContext:           (&net.Dialer{Timeout: 20 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+	TLSHandshakeTimeout:   40 * time.Second,
+	ResponseHeaderTimeout: 60 * time.Second,
+	IdleConnTimeout:       60 * time.Second,
+	MaxIdleConnsPerHost:   16,
+	ForceAttemptHTTP2:     true,
+}}
+
+// mirrorsOn включает запасные зеркала BMCLAPI (настройка «Зеркала»).
+var mirrorsOn int32 = 1
+
+func urlsWithMirrors(u string) []string {
+	if atomic.LoadInt32(&mirrorsOn) == 0 {
+		return []string{u}
+	}
+	return append([]string{u}, mirrorsFor(u)...)
+}
+
+// mirrorsFor: зеркало BMCLAPI для хостов Mojang, Forge, NeoForge, Fabric и Quilt (файлы проверяются по sha1).
+func mirrorsFor(u string) []string {
+	const m = "https://bmclapi2.bangbang93.com"
+	for _, r := range []struct{ from, to string }{
+		{"https://maven.neoforged.net/releases/", m + "/maven/"},
+		{"https://meta.quiltmc.org/", m + "/quilt-meta/"},
+		{"https://maven.quiltmc.org/repository/release/", m + "/quilt-maven/"},
+		{"https://resources.download.minecraft.net/", m + "/assets/"},
+		{"https://libraries.minecraft.net/", m + "/maven/"},
+		{"https://piston-data.mojang.com/", m + "/"},
+		{"https://piston-meta.mojang.com/", m + "/"},
+		{"https://launcher.mojang.com/", m + "/"},
+		{"https://maven.minecraftforge.net/", m + "/maven/"},
+		{"https://maven.fabricmc.net/", m + "/maven/"},
+		{"https://meta.fabricmc.net/", m + "/fabric-meta/"},
+	} {
+		if strings.HasPrefix(u, r.from) {
+			return []string{r.to + strings.TrimPrefix(u, r.from)}
+		}
+	}
+	return nil
+}
 
 const (
 	manifestURL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
@@ -54,14 +95,24 @@ func httpGet(ctx context.Context, u string) (*http.Response, error) {
 }
 
 func getJSON(ctx context.Context, u string, v any) error {
-	ctx, cancel := context.WithTimeout(ctx, 40*time.Second)
-	defer cancel()
-	resp, err := httpGet(ctx, u)
-	if err != nil {
-		return err
+	var last error
+	for _, x := range urlsWithMirrors(u) {
+		cctx, cancel := context.WithTimeout(ctx, 40*time.Second)
+		resp, err := httpGet(cctx, x)
+		if err == nil {
+			err = json.NewDecoder(resp.Body).Decode(v)
+			resp.Body.Close()
+		}
+		cancel()
+		if err == nil {
+			return nil
+		}
+		last = err
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 	}
-	defer resp.Body.Close()
-	return json.NewDecoder(resp.Body).Decode(v)
+	return last
 }
 
 // ---------- описание версии ----------
@@ -289,78 +340,6 @@ func (a *App) setStage(s string, done, total int) {
 	a.jmu.Unlock()
 }
 
-func (a *App) startJob(kind string) error {
-	a.jmu.Lock()
-	if a.busy {
-		a.jmu.Unlock()
-		return errors.New(a.tr("Уже идёт загрузка", "A download is already running"))
-	}
-	a.gmu.Lock()
-	running := a.gameCmd != nil
-	a.gmu.Unlock()
-	if kind == "play" && running {
-		a.jmu.Unlock()
-		return errors.New(a.tr("Игра уже запущена", "The game is already running"))
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	a.busy, a.kind, a.errMsg, a.stage, a.done, a.total, a.cancel = true, kind, "", "", 0, 0, cancel
-	a.jmu.Unlock()
-	go func() {
-		err := a.runJob(ctx, kind)
-		a.jmu.Lock()
-		a.busy = false
-		a.cancel = nil
-		a.stage, a.done, a.total = "", 0, 0
-		if err != nil {
-			if errors.Is(err, context.Canceled) {
-				a.errMsg = a.tr("Отменено", "Cancelled")
-			} else {
-				a.errMsg = err.Error()
-			}
-		}
-		a.jmu.Unlock()
-		if err != nil {
-			a.lg.add("[Mobilix] " + a.tr("Ошибка: ", "Error: ") + err.Error())
-		}
-		cancel()
-	}()
-	return nil
-}
-
-func (a *App) runJob(ctx context.Context, kind string) error {
-	s := a.settings()
-	if s.Selected == "" {
-		return errors.New(a.tr("Выберите версию Minecraft", "Pick a Minecraft version"))
-	}
-	if kind == "play" {
-		a.rotateLog()
-	}
-	prof, err := a.ensureProfile(ctx, s)
-	if err != nil {
-		return err
-	}
-	v, err := a.loadVersion(prof)
-	if err != nil {
-		return err
-	}
-	if err := a.ensureFiles(ctx, v, s); err != nil {
-		return err
-	}
-	if kind == "install" {
-		a.lg.add("[Mobilix] " + a.tr("Версия скачана: ", "Version downloaded: ") + prof)
-		return nil
-	}
-	javaMajor := 8
-	if v.JavaVersion != nil {
-		javaMajor = v.JavaVersion.MajorVersion
-	}
-	java, err := a.ensureJava(ctx, javaMajor, s)
-	if err != nil {
-		return err
-	}
-	return a.launch(v, s, java)
-}
-
 // ---------- манифест, Fabric ----------
 
 type ManifestEntry struct {
@@ -419,96 +398,6 @@ func (a *App) hVersions(w http.ResponseWriter, r *http.Request) {
 	jw(w, map[string]any{"latest": m.Latest, "versions": out})
 }
 
-func (a *App) fabricLoaders(ctx context.Context, mc string) ([]string, error) {
-	var list []struct {
-		Loader struct {
-			Version string `json:"version"`
-			Stable  bool   `json:"stable"`
-		} `json:"loader"`
-	}
-	if err := getJSON(ctx, "https://meta.fabricmc.net/v2/versions/loader/"+mc, &list); err != nil {
-		return nil, err
-	}
-	var out []string
-	for _, e := range list {
-		if e.Loader.Stable {
-			out = append(out, e.Loader.Version)
-		}
-	}
-	if len(out) == 0 {
-		for _, e := range list {
-			out = append(out, e.Loader.Version)
-		}
-	}
-	if len(out) == 0 {
-		return nil, errors.New(a.tr("Для этой версии нет Fabric", "No Fabric for this version"))
-	}
-	return out, nil
-}
-
-func (a *App) hFabric(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-	l, err := a.fabricLoaders(ctx, r.URL.Query().Get("mc"))
-	if err != nil {
-		jerr(w, 502, err.Error())
-		return
-	}
-	if len(l) > 12 {
-		l = l[:12]
-	}
-	jw(w, map[string]any{"loaders": l})
-}
-
-// ensureProfile скачивает json нужной версии (и Fabric), возвращает id профиля.
-func (a *App) ensureProfile(ctx context.Context, s Settings) (string, error) {
-	a.setStage(a.tr("Список версий", "Version list"), 0, 0)
-	mc := s.Selected
-	if _, err := os.Stat(a.verPath(mc)); err != nil {
-		m, err := a.manifest(ctx)
-		if err != nil {
-			return "", fmt.Errorf("%s: %w", a.tr("нет доступа к серверу версий", "cannot reach the version server"), err)
-		}
-		var ent *ManifestEntry
-		for i := range m.Versions {
-			if m.Versions[i].ID == mc {
-				ent = &m.Versions[i]
-			}
-		}
-		if ent == nil {
-			return "", errors.New(a.tr("Версия не найдена: ", "Version not found: ") + mc)
-		}
-		if err := a.fetchFile(ctx, ent.URL, a.verPath(mc), ent.SHA1, 0, nil); err != nil {
-			return "", err
-		}
-	}
-	if s.Loader != "fabric" {
-		return mc, nil
-	}
-	lv := s.LoaderVer
-	if lv == "" {
-		l, err := a.fabricLoaders(ctx, mc)
-		if err != nil {
-			// без сети можно использовать уже установленный Fabric
-			for _, id := range a.installedVersions() {
-				if strings.HasPrefix(id, "fabric-loader-") && strings.HasSuffix(id, "-"+mc) {
-					return id, nil
-				}
-			}
-			return "", err
-		}
-		lv = l[0]
-	}
-	id := "fabric-loader-" + lv + "-" + mc
-	if _, err := os.Stat(a.verPath(id)); err != nil {
-		u := fmt.Sprintf("https://meta.fabricmc.net/v2/versions/loader/%s/%s/profile/json", mc, lv)
-		if err := a.fetchFile(ctx, u, a.verPath(id), "", 0, nil); err != nil {
-			return "", err
-		}
-	}
-	return id, nil
-}
-
 // ---------- загрузка файлов ----------
 
 type dlItem struct {
@@ -541,51 +430,55 @@ func fileSHA1(p string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// fetchFile качает файл (до 3 попыток), проверяет sha1; onBytes получает число скачанных байт.
+// fetchFile качает файл (по 2 попытки на адрес и на каждое зеркало), проверяет sha1; onBytes получает число скачанных байт.
 func (a *App) fetchFile(ctx context.Context, u, dest, sum string, size int64, onBytes func(int64)) error {
 	if fileOK(dest, size, sum) {
 		return nil
 	}
 	_ = os.MkdirAll(filepath.Dir(dest), 0o755)
 	var last error
-	for try := 0; try < 3; try++ {
-		if ctx.Err() != nil {
-			return ctx.Err()
+	for _, x := range urlsWithMirrors(u) {
+		for try := 0; try < 2; try++ {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			last = a.fetchOnce(ctx, x, dest, sum, onBytes)
+			if last == nil {
+				return nil
+			}
+			time.Sleep(time.Duration(try+1) * 600 * time.Millisecond)
 		}
-		last = func() error {
-			resp, err := httpGet(ctx, u)
-			if err != nil {
-				return err
-			}
-			defer resp.Body.Close()
-			tmp := dest + ".part"
-			f, err := os.Create(tmp)
-			if err != nil {
-				return err
-			}
-			h := sha1.New()
-			var rd io.Reader = resp.Body
-			if onBytes != nil {
-				rd = &countReader{r: resp.Body, f: onBytes}
-			}
-			_, err = io.Copy(io.MultiWriter(f, h), rd)
-			f.Close()
-			if err != nil {
-				os.Remove(tmp)
-				return err
-			}
-			if sum != "" && hex.EncodeToString(h.Sum(nil)) != sum {
-				os.Remove(tmp)
-				return errors.New("sha1 mismatch: " + u)
-			}
-			return os.Rename(tmp, dest)
-		}()
-		if last == nil {
-			return nil
-		}
-		time.Sleep(time.Duration(try+1) * 700 * time.Millisecond)
 	}
 	return last
+}
+
+func (a *App) fetchOnce(ctx context.Context, u, dest, sum string, onBytes func(int64)) error {
+	resp, err := httpGet(ctx, u)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	tmp := dest + ".part"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	h := sha1.New()
+	var rd io.Reader = resp.Body
+	if onBytes != nil {
+		rd = &countReader{r: resp.Body, f: onBytes}
+	}
+	_, err = io.Copy(io.MultiWriter(f, h), rd)
+	f.Close()
+	if err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if sum != "" && hex.EncodeToString(h.Sum(nil)) != sum {
+		os.Remove(tmp)
+		return errors.New("sha1 mismatch: " + u)
+	}
+	return os.Rename(tmp, dest)
 }
 
 type countReader struct {
@@ -602,6 +495,13 @@ func (c *countReader) Read(p []byte) (int, error) {
 }
 
 func (a *App) fetchAll(ctx context.Context, label string, items []dlItem, threads int) error {
+	kept := items[:0:0]
+	for _, it := range items {
+		if it.url != "" { // библиотеки, которые создаёт установщик Forge, не качаются
+			kept = append(kept, it)
+		}
+	}
+	items = kept
 	if len(items) == 0 {
 		return nil
 	}
@@ -1009,150 +909,12 @@ func (a *App) ensureJava(ctx context.Context, req int, s Settings) (string, erro
 
 // ---------- запуск ----------
 
-func (a *App) gameDir(s Settings) string {
-	if !s.Isolate {
-		return a.path("game")
-	}
-	name := s.Selected
-	if s.Loader == "fabric" {
-		name = "fabric-" + s.Selected
-	}
-	return a.path("instances", name)
-}
-
 func offlineUUID(name string) string {
 	h := md5.Sum([]byte("OfflinePlayer:" + name))
 	h[6] = (h[6] & 0x0f) | 0x30
 	h[8] = (h[8] & 0x3f) | 0x80
 	x := hex.EncodeToString(h[:])
 	return x[:8] + "-" + x[8:12] + "-" + x[12:16] + "-" + x[16:20] + "-" + x[20:]
-}
-
-func (a *App) launch(v *Version, s Settings, java string) error {
-	a.setStage(a.tr("Запуск игры", "Starting the game"), 0, 0)
-	libs, _ := a.collectLibs(v)
-	var cp []string
-	for _, l := range libs {
-		cp = append(cp, a.path("shared", "libraries", filepath.FromSlash(l.art.Path)))
-	}
-	cp = append(cp, a.path("shared", "versions", v.jarID, v.jarID+".jar"))
-	gdir := a.gameDir(s)
-	_ = os.MkdirAll(gdir, 0o755)
-	assetsID := v.Assets
-	if v.AssetIndex != nil {
-		assetsID = v.AssetIndex.ID
-	}
-	gameAssets := a.assetsRoot()
-	if assetsID == "legacy" || assetsID == "pre-1.6" {
-		if assetsID == "legacy" {
-			gameAssets = filepath.Join(a.assetsRoot(), "virtual", "legacy")
-		} else {
-			gameAssets = filepath.Join(gdir, "resources")
-		}
-	}
-	vtype := v.Type
-	if vtype == "" {
-		vtype = "release"
-	}
-	repl := map[string]string{
-		"auth_player_name": s.Nick, "version_name": v.ID, "game_directory": gdir, "assets_root": a.assetsRoot(),
-		"assets_index_name": assetsID, "auth_uuid": offlineUUID(s.Nick), "auth_access_token": "0", "clientid": "", "auth_xuid": "",
-		"user_type": "legacy", "version_type": vtype, "user_properties": "{}", "auth_session": "0", "game_assets": gameAssets,
-		"natives_directory": a.nativesDir(v), "launcher_name": "Mobilix", "launcher_version": appVersion,
-		"classpath": strings.Join(cp, string(os.PathListSeparator)), "library_directory": a.path("shared", "libraries"),
-		"classpath_separator": string(os.PathListSeparator), "primary_jar": a.path("shared", "versions", v.jarID, v.jarID+".jar"),
-		"resolution_width": "854", "resolution_height": "480",
-	}
-	sub := func(x string) string {
-		for k, val := range repl {
-			x = strings.ReplaceAll(x, "${"+k+"}", val)
-		}
-		return x
-	}
-	feats := map[string]bool{}
-	expand := func(items []ArgItem) []string {
-		var out []string
-		for _, it := range items {
-			if !rulesOK(it.Rules, feats) {
-				continue
-			}
-			for _, x := range it.Value {
-				out = append(out, sub(x))
-			}
-		}
-		return out
-	}
-	args := []string{fmt.Sprintf("-Xmx%dM", s.RamMB), "-Xms256M", "-Dlog4j2.formatMsgNoLookups=true"}
-	if m := javaMajor(java); m >= 9 || m == 0 {
-		args = append(args, "-XX:+UseG1GC")
-	}
-	args = append(args, strings.Fields(s.JvmArgs)...)
-	if v.Logging != nil && v.Logging.Client != nil && v.Logging.Client.Argument != "" {
-		lf := a.path("shared", "assets", "log_configs", filepath.Base(v.Logging.Client.File.URL[strings.LastIndex(v.Logging.Client.File.URL, "/")+1:]))
-		args = append(args, strings.ReplaceAll(v.Logging.Client.Argument, "${path}", lf))
-	}
-	var jvm, game []string
-	if v.Arguments != nil {
-		jvm = expand(v.Arguments.JVM)
-		game = expand(v.Arguments.Game)
-	} else {
-		jvm = []string{sub("-Djava.library.path=${natives_directory}"), "-cp", sub("${classpath}")}
-		for _, x := range strings.Fields(v.MinecraftArguments) {
-			game = append(game, sub(x))
-		}
-	}
-	hasCP := false
-	for _, x := range jvm {
-		if x == "-cp" || x == "-classpath" {
-			hasCP = true
-		}
-	}
-	if !hasCP {
-		jvm = append(jvm, "-cp", repl["classpath"])
-	}
-	if s.Fullscreen {
-		game = append(game, "--fullscreen")
-	}
-	full := append(append(append(args, jvm...), v.MainClass), game...)
-	a.lg.add("[Mobilix] " + a.tr("Java: ", "Java: ") + java)
-	a.lg.add("[Mobilix] " + a.tr("Папка игры: ", "Game folder: ") + gdir)
-	cmd := exec.Command(gameJava(java), full...)
-	cmd.Dir = gdir
-	hideWindow(cmd)
-	stdout, _ := cmd.StdoutPipe()
-	cmd.Stderr = cmd.Stdout
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	a.gmu.Lock()
-	a.gameCmd = cmd
-	a.gmu.Unlock()
-	a.lg.add("[Mobilix] " + a.tr("Игра запущена", "Game started"))
-	go func() {
-		sc := bufio.NewScanner(stdout)
-		sc.Buffer(make([]byte, 64*1024), 1<<20)
-		for sc.Scan() {
-			a.lg.add(sc.Text())
-		}
-		err := cmd.Wait()
-		code := 0
-		if err != nil {
-			var ee *exec.ExitError
-			if errors.As(err, &ee) {
-				code = ee.ExitCode()
-			} else {
-				code = -1
-			}
-		}
-		a.gmu.Lock()
-		a.gameCmd = nil
-		a.gmu.Unlock()
-		a.lg.add(fmt.Sprintf("[Mobilix] "+a.tr("Игра закрыта (код %d)", "Game exited (code %d)"), code))
-	}()
-	if s.CloseOnPlay {
-		go func() { time.Sleep(4 * time.Second); a.shutdown() }()
-	}
-	return nil
 }
 
 // ---------- скин ----------
@@ -1163,9 +925,15 @@ func (a *App) hSkin(w http.ResponseWriter, r *http.Request) {
 	if src == "" {
 		src = s.SkinSrc
 	}
+	if ac := a.account(); ac.Type == "ely" { // при входе через аккаунт источник скина заблокирован
+		src = "ely"
+	}
 	nick := r.URL.Query().Get("nick")
 	if nick == "" {
-		nick = s.Nick
+		nick = s.SkinNick
+	}
+	if nick == "" {
+		nick, _, _, _ = a.playerName(s)
 	}
 	nick = cleanNick(nick)
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)

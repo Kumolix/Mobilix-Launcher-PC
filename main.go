@@ -25,37 +25,73 @@ import (
 //go:embed ui
 var uiFS embed.FS
 
-const appVersion = "1.0.0"
+const appVersion = "1.1.0"
 const fixedPort = 52871
 
 func itoa(n int) string { return strconv.Itoa(n) }
 
 // ---------- настройки ----------
 
-type Settings struct {
-	Lang        string `json:"lang"`     // ru | en
-	Style       string `json:"style"`    // new (графит) | old (классика, зелёный)
-	Light       bool   `json:"light"`    // светлая тема
-	MenuType    string `json:"menuType"` // side (по наведению) | bottom
-	Aurora      bool   `json:"aurora"`
-	Nick        string `json:"nick"`
-	SkinSrc     string `json:"skinSrc"`   // mojang | ely | file
-	SkinModel   int    `json:"skinModel"` // 0 авто, 1 широкий, 2 стройный
-	RamMB       int    `json:"ramMb"`
-	JavaPath    string `json:"javaPath"`
-	JvmArgs     string `json:"jvmArgs"`
-	Fullscreen  bool   `json:"fullscreen"`
-	Threads     int    `json:"threads"`
-	Isolate     bool   `json:"isolate"`
-	CloseOnPlay bool   `json:"closeOnPlay"`
-	Selected    string `json:"selected"`
-	Loader      string `json:"loader"` // vanilla | fabric
-	LoaderVer   string `json:"loaderVer"`
+type Build struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	MC        string `json:"mc"`
+	Loader    string `json:"loader"`
+	LoaderVer string `json:"loaderVer"`
 }
 
+type CTheme struct {
+	Name   string            `json:"name"`
+	Colors map[string]string `json:"colors"`
+}
+
+type Settings struct {
+	Lang        string   `json:"lang"`     // ru | en
+	Style       string   `json:"style"`    // new (графит) | old (классика, зелёный)
+	Light       bool     `json:"light"`    // светлая тема
+	MenuType    string   `json:"menuType"` // side (по наведению) | bottom
+	Aurora      bool     `json:"aurora"`
+	Nick        string   `json:"nick"`
+	SkinSrc     string   `json:"skinSrc"`   // mojang | ely | file
+	SkinNick    string   `json:"skinNick"`  // ник, по которому берётся скин (пусто — ник игрока)
+	SkinModel   int      `json:"skinModel"` // 0 авто, 1 широкий, 2 стройный
+	RamMB       int      `json:"ramMb"`
+	MemAuto     bool     `json:"memAuto"`
+	JavaPath    string   `json:"javaPath"`
+	JvmArgs     string   `json:"jvmArgs"`
+	GC          string   `json:"gc"` // "" | G1 | Parallel | Serial | ZGC
+	Fullscreen  bool     `json:"fullscreen"`
+	Threads     int      `json:"threads"`
+	Isolate     bool     `json:"isolate"`
+	CloseOnPlay bool     `json:"closeOnPlay"`
+	Selected    string   `json:"selected"`
+	Loader      string   `json:"loader"` // vanilla | fabric | quilt | forge | neoforge
+	LoaderVer   string   `json:"loaderVer"`
+	Build       string   `json:"build"` // id выбранной сборки ("" — обычная версия)
+	Builds      []Build  `json:"builds"`
+	UpdMode     int      `json:"updMode"` // 0 не проверять, 1 сообщать, 2 скачивать
+	ModAuto     bool     `json:"modAuto"`
+	ModDlManual bool     `json:"modDlManual"`
+	WorldBackup bool     `json:"worldBackup"`
+	Mirrors     bool     `json:"mirrors"` // зеркала BMCLAPI как запасной путь загрузки
+	MirrorAPI   string   `json:"mirrorApi"`
+	ModSource   string   `json:"modSource"` // modrinth | curseforge
+	Corelix     bool     `json:"corelix"`
+	Preset      int      `json:"preset"` // 0 не менять, 1..4 быстрые настройки графики
+	PresetStamp int      `json:"presetStamp"`
+	MaxFps      int      `json:"maxFps"` // 0 не менять
+	Mip         int      `json:"mip"`    // -1 не менять
+	CThemes     []CTheme `json:"cThemes"`
+	CSel        int      `json:"cSel"` // -1 встроенная тема
+}
+
+const defaultMirrorAPI = "https://api.modrinth.black/v2"
+
 func defaultSettings() Settings {
-	return Settings{Lang: "ru", Style: "new", MenuType: "side", Aurora: true, Nick: "Player", SkinSrc: "mojang",
-		RamMB: 4096, Threads: 8, Isolate: true, Loader: "vanilla"}
+	return Settings{Lang: "ru", Style: "new", MenuType: "bottom", Aurora: true, Nick: "Player", SkinSrc: "mojang",
+		RamMB: 4096, MemAuto: true, Threads: 8, Isolate: true, Loader: "vanilla", UpdMode: 1, ModAuto: true,
+		WorldBackup: true, Mirrors: true, MirrorAPI: defaultMirrorAPI, ModSource: "modrinth", Corelix: true,
+		Mip: -1, CSel: -1, Builds: []Build{}, CThemes: []CTheme{}}
 }
 
 type App struct {
@@ -174,7 +210,7 @@ func (a *App) routes() http.Handler {
 	a.api(mux, "/api/state", func(w http.ResponseWriter, r *http.Request) {
 		jw(w, map[string]any{
 			"version": appVersion, "settings": a.settings(), "installed": a.installedVersions(),
-			"ramMb": totalRAMMB(), "dataDir": a.dataDir, "update": a.updateTag,
+			"ramMb": totalRAMMB(), "dataDir": a.dataDir, "update": a.updateTag, "account": a.account().public(), "cf": cfKey != "", "os": runtime.GOOS,
 			"status": a.status(),
 		})
 	})
@@ -199,7 +235,47 @@ func (a *App) routes() http.Handler {
 	})
 	a.api(mux, "/api/status", func(w http.ResponseWriter, r *http.Request) { jw(w, a.status()) })
 	a.api(mux, "/api/versions", a.hVersions)
-	a.api(mux, "/api/fabric", a.hFabric)
+	a.api(mux, "/api/loaders", a.hLoaders)
+	a.api(mux, "/api/installed", func(w http.ResponseWriter, r *http.Request) { jw(w, map[string]any{"list": a.installedList()}) })
+	a.api(mux, "/api/build/create", a.hBuildCreate)
+	a.api(mux, "/api/build/delete", a.hBuildDelete)
+	a.api(mux, "/api/build/dup", a.hBuildDup)
+	a.api(mux, "/api/build/export", a.hBuildExport)
+	a.api(mux, "/api/import", a.hImport)
+	a.api(mux, "/api/worlds", a.hWorlds)
+	a.api(mux, "/api/backups", a.hBackups)
+	a.api(mux, "/api/backups/restore", a.hRestore)
+	a.api(mux, "/api/account", func(w http.ResponseWriter, r *http.Request) { jw(w, a.account().public()) })
+	a.api(mux, "/api/account/ely", func(w http.ResponseWriter, r *http.Request) {
+		var b struct{ User, Pass, Code string }
+		if readBody(r, &b) != nil || b.User == "" || b.Pass == "" {
+			jerr(w, 400, a.tr("Введите логин и пароль", "Enter login and password"))
+			return
+		}
+		pass := b.Pass
+		if b.Code != "" {
+			pass += ":" + b.Code
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		if err := a.elyLogin(ctx, b.User, pass); err != nil {
+			jerr(w, 401, err.Error())
+			return
+		}
+		jw(w, a.account().public())
+	})
+	a.api(mux, "/api/account/logout", func(w http.ResponseWriter, r *http.Request) {
+		a.saveAccount(Account{})
+		a.saveSettings(func(s *Settings) { s.SkinSrc = "mojang" })
+		jw(w, map[string]any{"ok": true})
+	})
+	a.api(mux, "/api/update/apply", func(w http.ResponseWriter, r *http.Request) {
+		if err := a.startFn("update", a.applyUpdate); err != nil {
+			jerr(w, 409, err.Error())
+			return
+		}
+		jw(w, map[string]any{"ok": true})
+	})
 	a.api(mux, "/api/play", func(w http.ResponseWriter, r *http.Request) {
 		if err := a.startJob("play"); err != nil {
 			jerr(w, 409, err.Error())
@@ -293,7 +369,7 @@ func (a *App) routes() http.Handler {
 		}
 		_ = readBody(r, &b)
 		u, err := url.Parse(b.URL)
-		ok := map[string]bool{"t.me": true, "github.com": true, "modrinth.com": true, "www.tiktok.com": true}
+		ok := map[string]bool{"t.me": true, "github.com": true, "modrinth.com": true, "www.tiktok.com": true, "kumolix.github.io": true, "ely.by": true, "account.ely.by": true}
 		if err != nil || u.Scheme != "https" || !ok[u.Host] {
 			jerr(w, 400, "url not allowed")
 			return
@@ -431,6 +507,7 @@ func main() {
 	rb, _ := json.Marshal(runInfo{a.port, a.token})
 	_ = os.WriteFile(a.path("run.json"), rb, 0o644)
 	a.lg.add("[Mobilix] PC " + appVersion)
+	cleanOld()
 	go a.checkUpdate()
 	srv := &http.Server{Handler: a.routes()}
 	go func() { _ = srv.Serve(ln) }()
@@ -445,26 +522,6 @@ func main() {
 	}
 	a.openWindow(addr)
 	a.watchdog()
-}
-
-func (a *App) checkUpdate() {
-	c := &http.Client{Timeout: 8 * time.Second}
-	req, _ := http.NewRequest("GET", "https://api.github.com/repos/Kumolix/Mobilix-Launcher-PC/releases/latest", nil)
-	req.Header.Set("User-Agent", "Mobilix-PC/"+appVersion)
-	resp, err := c.Do(req)
-	if err != nil {
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return
-	}
-	var r struct {
-		Tag string `json:"tag_name"`
-	}
-	if json.NewDecoder(resp.Body).Decode(&r) == nil && r.Tag != "" && strings.TrimPrefix(r.Tag, "v") != appVersion {
-		a.updateTag = r.Tag
-	}
 }
 
 // ---------- журнал ----------

@@ -22,43 +22,45 @@
   </header>
 
   <main id="stage">
-    <section id="skinCard" class="card">
-      <div id="skinView"></div>
-      <div id="ground"></div>
-      <div id="nickLabel"></div>
-      <div id="logWin" class="hidden">
-        <div class="lhead">
-          <button class="ltab on" id="tabLatest"></button>
-          <button class="ltab" id="tabPrev"></button>
-          <button class="ltab" id="tabCopy"></button>
-          <button class="ltab hidden" id="tabStop"></button>
-          <span class="lsp"></span>
-          <button class="ltab" id="tabClose">✕</button>
+    <div id="skinCol">
+      <div id="loginTag"></div>
+      <section id="skinCard" class="card loading">
+        <div id="skinView"></div>
+        <div id="skinLoad"></div>
+        <div id="ground"></div>
+        <div id="nickLabel"></div>
+        <div id="logWin" class="hidden">
+          <div class="lhead">
+            <button class="ltab on" id="tabLatest"></button>
+            <button class="ltab" id="tabPrev"></button>
+            <button class="ltab" id="tabCopy"></button>
+            <button class="ltab hidden" id="tabStop"></button>
+            <span class="lsp"></span>
+            <button class="ltab" id="tabClose">✕</button>
+          </div>
+          <pre id="logText"></pre>
         </div>
-        <pre id="logText"></pre>
-      </div>
-    </section>
-  </main>
-
-  <footer id="bottom">
-    <div id="dockSlot"></div>
-    <div id="playGroup">
-      <div id="statusRow"><span id="stText"></span><span id="stPct"></span></div>
-      <div id="progress"><i></i></div>
-      <div id="actRow">
-        <div class="vrow">
-          <button class="vbtn" id="verBtn"></button>
-          <button class="varrow" id="verArrow">▲</button>
-          <div class="popup hidden" id="verPopup"></div>
+      </section>
+    </div>
+    <div id="right">
+      <div id="playGroup">
+        <div id="statusRow"><span id="stText"></span><span id="stPct"></span></div>
+        <div id="progress"><i></i></div>
+        <div id="actRow">
+          <div class="vrow">
+            <button class="vbtn" id="verBtn"></button>
+            <button class="varrow" id="verArrow">▲</button>
+            <div class="popup hidden" id="verPopup"></div>
+          </div>
+          <button id="playBtn"></button>
         </div>
-        <button id="playBtn"></button>
       </div>
     </div>
-  </footer>
+  </main>
+
+  <footer id="bottom"><div id="dockSlot"></div></footer>
 </div>
 
-<div id="hint"></div>
-<div id="hot"></div>
 <div id="scrim"></div>
 <aside id="drawer"></aside>
 <div id="pageLayer" class="hidden"></div>

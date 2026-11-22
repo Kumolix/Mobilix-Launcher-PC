@@ -44,10 +44,16 @@ canvas.pix { image-rendering:pixelated; display:block; }
 #verLabel.upd { color:var(--accent); cursor:pointer; text-decoration:underline; }
 
 /* центр: скин / лог */
-#stage { flex:1; min-height:0; padding:2px 12px 10px; }
+#stage { flex:1; min-height:0; padding:2px 16px 6px; display:flex; gap:16px; container-type:size; }
+#skinCol { height:100%; width:calc(100cqh - 30px); display:flex; flex-direction:column; gap:6px; flex:none; }
+#loginTag { flex:none; align-self:flex-start; font-size:12px; font-weight:600; padding:3px 12px; border-radius:10px; color:var(--accent); background:color-mix(in srgb,var(--act) 20%,transparent); border:1px solid color-mix(in srgb,var(--act) 45%,transparent); }
+#right { flex:1; min-width:0; display:flex; align-items:flex-end; justify-content:flex-end; }
+#skinLoad { position:absolute; inset:0; display:none; align-items:center; justify-content:center; color:var(--dim); font-size:16px; z-index:3; background:color-mix(in srgb,var(--skinBg) 92%,transparent); }
+#skinCard.loading #skinLoad { display:flex; }
+#skinCard.loading #skinView, #skinCard.loading #ground { visibility:hidden; }
 .card { background:color-mix(in srgb,var(--skinBg) 69%,transparent); border:1px solid color-mix(in srgb,var(--accent) 40%,transparent);
   border-radius:26px; position:relative; overflow:hidden; }
-#skinCard { height:100%; }
+#skinCard { flex:1; min-height:0; }
 #skinView { position:absolute; inset:0; }
 .s3d { perspective:1100px; cursor:grab; }
 .s3d:active { cursor:grabbing; }
@@ -66,9 +72,11 @@ canvas.pix { image-rendering:pixelated; display:block; }
 @keyframes fadein { from { opacity:0; } }
 
 /* низ: нижнее меню слева; версия и «Играть» справа внизу */
-#bottom { flex:none; height:84px; padding:0 12px 12px; display:flex; align-items:flex-end; justify-content:space-between; position:relative; z-index:30; }
-#playGroup { width:min(640px,62%); display:flex; flex-direction:column; gap:7px; }
-#statusRow { display:flex; justify-content:space-between; font-size:12px; color:var(--dim); height:15px; padding:0 4px; }
+#bottom { flex:none; height:92px; padding:0 12px 14px; display:flex; align-items:flex-end; justify-content:center; position:relative; z-index:30; }
+body.side #bottom { height:10px; padding:0; }
+#playGroup { width:min(560px,100%); display:flex; flex-direction:column; gap:7px; }
+#statusRow { display:flex; justify-content:space-between; gap:10px; font-size:12px; color:var(--dim); min-height:15px; padding:0 4px; }
+#stText { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 #statusRow .err { color:#ff7d80; }
 #progress { height:6px; border-radius:3px; background:var(--chip2); overflow:hidden; position:relative; }
 #progress i { position:absolute; left:0; top:0; bottom:0; width:0; border-radius:3px; background:linear-gradient(90deg,var(--act),var(--accent)); transition:width .25s; }
@@ -80,7 +88,7 @@ canvas.pix { image-rendering:pixelated; display:block; }
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; border:1px solid transparent; }
 .vbtn:hover, .varrow:hover { border-color:color-mix(in srgb,var(--accent) 45%,transparent); }
 .varrow { width:56px; border-radius:18px; background:var(--chip2); color:var(--accent); font-size:16px; border:1px solid transparent; }
-#playBtn { width:210px; border-radius:18px; font-size:22px; font-weight:700; letter-spacing:.08em; color:#fff;
+#playBtn { width:170px; border-radius:18px; font-size:22px; font-weight:700; letter-spacing:.08em; color:#fff;
   background:linear-gradient(90deg,var(--act),var(--hi)); animation:pulse 1.4s ease-in-out infinite alternate; transition:filter .15s; }
 #playBtn:hover { filter:brightness(1.12); }
 #playBtn:active { transform:scale(.97); }
@@ -95,8 +103,8 @@ canvas.pix { image-rendering:pixelated; display:block; }
 .popup .sepl { height:1px; background:var(--line2); margin:5px 8px; }
 
 /* нижнее меню: иконки становятся крупнее, фон скруглённый и выходит за края панели */
-.dock { display:flex; height:56px; padding:0 8px; background:var(--bar); border:1px solid var(--line); border-radius:26px; position:relative; }
-.dock .cell { position:relative; width:56px; height:56px; display:flex; align-items:center; justify-content:center; border-radius:18px;
+.dock { display:flex; height:66px; padding:0 10px; background:var(--bar); border:1px solid var(--line); border-radius:26px; position:relative; }
+.dock .cell { position:relative; width:68px; height:66px; display:flex; align-items:center; justify-content:center; border-radius:18px;
   cursor:pointer; transition:transform .16s cubic-bezier(.2,.9,.3,1.3), background .16s, box-shadow .16s; }
 .dock .cell:hover { transform:scale(1.38) translateY(-5px); z-index:5; background:color-mix(in srgb,var(--act) 28%,var(--chip));
   box-shadow:0 8px 22px var(--shadow), 0 0 0 1px color-mix(in srgb,var(--accent) 55%,transparent); }
@@ -106,20 +114,20 @@ canvas.pix { image-rendering:pixelated; display:block; }
   opacity:0; pointer-events:none; transition:opacity .12s; }
 .dock .cell:hover::after { opacity:1; }
 
-/* боковое меню: выезжает при наведении мыши, убирается, когда мышь уходит */
-#hot { position:fixed; left:0; top:56px; bottom:0; width:14px; z-index:49; }
-#hint { position:fixed; left:0; top:50%; width:4px; height:84px; margin-top:-42px; border-radius:0 4px 4px 0; z-index:48; pointer-events:none;
-  background:linear-gradient(var(--accent),var(--act)); opacity:.55; box-shadow:0 0 14px var(--accent); animation:hint 2.4s ease-in-out infinite; transition:opacity .2s; }
-@keyframes hint { 50% { opacity:.2; } }
-#hint.off { opacity:0 !important; animation:none; }
-#drawer { position:fixed; left:0; top:0; bottom:0; width:300px; z-index:50; background:var(--drawer); border-radius:0 28px 28px 0;
-  padding:6px 0 10px; display:flex; flex-direction:column; transform:translateX(-103%); transition:transform .28s cubic-bezier(.2,.8,.2,1);
-  box-shadow:8px 0 30px var(--shadow); overflow:auto; }
-#drawer.open { transform:none; }
-#drawer .dt { height:56px; flex:none; display:flex; align-items:center; padding-left:28px; }
-.mi { flex:none; height:58px; margin:3px 10px; padding:0 18px; border-radius:16px; display:flex; align-items:center; gap:16px; font-size:18px; cursor:pointer; position:relative; }
+/* боковое меню: узкая панель с иконками всегда видна, при наведении раскрывается */
+body.side #app { padding-left:84px; }
+#drawer { position:fixed; left:0; top:0; bottom:0; width:84px; z-index:50; background:var(--drawer); border-radius:0 28px 28px 0; border-right:1px solid var(--line);
+  padding:6px 0 10px; display:flex; flex-direction:column; transition:width .24s cubic-bezier(.2,.8,.2,1);
+  box-shadow:4px 0 20px var(--shadow); overflow:hidden; }
+#drawer.open { width:300px; box-shadow:8px 0 30px var(--shadow); }
+body:not(.side) #drawer { transform:translateX(-103%); box-shadow:none; }
+#drawer .dt { height:56px; flex:none; display:flex; align-items:center; padding-left:28px; white-space:nowrap; opacity:0; transition:opacity .2s; }
+#drawer.open .dt { opacity:1; }
+.mi { flex:none; height:60px; margin:3px 10px; padding:0 18px; border-radius:16px; display:flex; align-items:center; gap:16px; font-size:18px; cursor:pointer; position:relative; white-space:nowrap; }
 .mi:hover { background:var(--chip); }
-.mi .ic { width:28px; display:flex; justify-content:center; }
+.mi .ic { width:36px; display:flex; justify-content:center; flex:none; }
+.mi span { opacity:0; transition:opacity .15s; }
+#drawer.open .mi span { opacity:1; }
 .badge { margin-left:auto; font-size:13px; font-weight:700; color:var(--accent); padding:4px 10px; border-radius:8px;
   background:color-mix(in srgb,var(--act) 20%,transparent); border:1px solid color-mix(in srgb,var(--act) 40%,transparent); }
 #scrim { position:fixed; inset:0; background:#000; opacity:0; pointer-events:none; z-index:45; transition:opacity .25s; }
@@ -127,7 +135,8 @@ canvas.pix { image-rendering:pixelated; display:block; }
 
 /* страницы */
 #pageLayer { position:fixed; left:0; right:0; top:56px; bottom:0; z-index:20; padding:2px 12px 10px; animation:fadein .15s; }
-#pageLayer.dockpad { bottom:84px; }
+#pageLayer.dockpad { bottom:92px; }
+body.side #pageLayer { left:84px; }
 .page { height:100%; display:flex; flex-direction:column; background:var(--drawer); position:relative;
   border:1px solid color-mix(in srgb,var(--accent) 40%,transparent); border-radius:26px; overflow:hidden; animation:rise .22s cubic-bezier(.2,.8,.2,1); }
 @keyframes rise { from { opacity:0; transform:translateY(18px); } }
@@ -197,4 +206,22 @@ h3.sec { margin:18px 0 6px; font-size:14px; color:var(--dim); font-weight:600; t
 ::-webkit-scrollbar-thumb { background:var(--chip); border-radius:6px; border:2px solid transparent; background-clip:content-box; }
 ::-webkit-scrollbar-thumb:hover { background:var(--hint); background-clip:content-box; }
 
-@media (max-width:900px) { #playGroup { width:78%; } #playBtn { width:160px; } .dock .cell { width:46px; } }
+
+
+/* вкладки, сетка тем, цветовое колесо */
+.tabs { display:flex; gap:6px; flex-wrap:wrap; margin:4px 0 12px; }
+.tabs button { background:var(--chip2); color:var(--text2); padding:9px 18px; border-radius:14px; font-size:15px; }
+.tabs button.on { background:var(--act); color:#fff; }
+.themes { display:flex; gap:10px; flex-wrap:wrap; }
+.tcard { width:120px; padding:8px; border-radius:14px; background:var(--chip2); border:2px solid transparent; cursor:pointer; font-size:13px; text-align:center; }
+.tcard.on { border-color:var(--accent); }
+.tcard i { display:block; height:34px; border-radius:8px; margin-bottom:6px; }
+.swatches { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:10px 0; }
+.swatch { display:flex; align-items:center; gap:10px; padding:8px; border-radius:12px; background:var(--chip2); cursor:pointer; border:2px solid transparent; font-size:13px; }
+.swatch.on { border-color:var(--accent); }
+.swatch i { width:26px; height:26px; border-radius:50%; border:1px solid var(--line); flex:none; }
+.wheelbox { display:flex; gap:14px; align-items:center; justify-content:center; }
+.wheelbox canvas { cursor:crosshair; border-radius:50%; }
+.bchip { font-size:12px; color:var(--dim); }
+.cat .btn.ok { background:var(--chip); color:var(--accent); }
+@media (max-width:900px) { #playGroup { width:100%; } #playBtn { width:160px; } }

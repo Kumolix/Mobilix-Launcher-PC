@@ -46,3 +46,18 @@ func TestJavaOK(t *testing.T) {
 		t.Fatal("java compat")
 	}
 }
+
+func TestPackHelpers(t *testing.T) {
+	if l, v := loaderFromDeps(map[string]string{"minecraft": "1.20.1", "fabric-loader": "0.15.7"}); l != "fabric" || v != "0.15.7" {
+		t.Fatal(l, v)
+	}
+	if l, _ := loaderFromDeps(map[string]string{"minecraft": "1.21"}); l != "vanilla" {
+		t.Fatal(l)
+	}
+	if safeJoin("/a/b", "../x") != "" || safeJoin("/a/b", "mods/x.jar") == "" {
+		t.Fatal("safeJoin")
+	}
+	if mcMinor("1.21.3") != 21 || mcMinor("1.8.9") != 8 {
+		t.Fatal("mcMinor")
+	}
+}

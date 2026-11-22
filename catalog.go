@@ -1,21 +1,218 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
-const modrinth = "https://api.modrinth.com/v2"
+const modrinthOfficial = "https://api.modrinth.com/v2"
 
-var typeDirs = map[string]string{"mod": "mods", "resourcepack": "resourcepacks", "shader": "shaderpacks", "datapack": "datapacks"}
+// cfKey подставляется при сборке: -ldflags "-X main.cfKey=...". В репозитории ключа нет.
+var cfKey = ""
+
+var typeDirs = map[string]string{"mod": "mods", "resourcepack": "resourcepacks", "shader": "shaderpacks", "datapack": "datapacks", "modpack": ""}
+
+func modrinthBases(s Settings) []string {
+	var out []string
+	if s.Mirrors && s.MirrorAPI != "" {
+		out = append(out, strings.TrimRight(s.MirrorAPI, "/"))
+	}
+	return append(out, modrinthOfficial)
+}
+
+func mrGet(ctx context.Context, s Settings, path string, v any) error {
+	var last error
+	for _, b := range modrinthBases(s) {
+		cctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+		err := getJSONNoMirror(cctx, b+path, v)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		last = err
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+	}
+	return last
+}
+
+func getJSONNoMirror(ctx context.Context, u string, v any) error {
+	resp, err := httpGet(ctx, u)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return json.NewDecoder(resp.Body).Decode(v)
+}
+
+// ---------- индекс установленного ----------
+// В папке каждой установки лежит mobilix-index.json: что и откуда поставлено. По нему каталог помнит «Установлено».
+
+type idxEntry struct {
+	Name  string   `json:"name"`
+	Type  string   `json:"type"`
+	World string   `json:"world,omitempty"`
+	Files []string `json:"files"` // пути относительно папки игры
+}
+
+var idxMu sync.Mutex
+
+func idxFile(gdir string) string { return filepath.Join(gdir, "mobilix-index.json") }
+
+func readIdx(gdir string) map[string]idxEntry {
+	m := map[string]idxEntry{}
+	if b, err := os.ReadFile(idxFile(gdir)); err == nil {
+		_ = json.Unmarshal(b, &m)
+	}
+	return m
+}
+
+func (a *App) idxUpdate(gdir string, mut func(map[string]idxEntry)) {
+	idxMu.Lock()
+	defer idxMu.Unlock()
+	m := readIdx(gdir)
+	mut(m)
+	for k, e := range m { // убираем записи, файлы которых удалены вручную
+		alive := false
+		for _, f := range e.Files {
+			if _, err := os.Stat(filepath.Join(gdir, filepath.FromSlash(f))); err == nil {
+				alive = true
+			}
+		}
+		if !alive {
+			delete(m, k)
+		}
+	}
+	b, _ := json.MarshalIndent(m, "", " ")
+	_ = os.MkdirAll(gdir, 0o755)
+	_ = os.WriteFile(idxFile(gdir), b, 0o644)
+}
+
+func idxKey(src, typ, id, world string) string {
+	k := src + ":" + typ + ":" + id
+	if world != "" {
+		k += ":" + world
+	}
+	return k
+}
+
+// ---------- загрузчики в фильтрах ----------
+
+func mrLoaders(l string) []string {
+	switch l {
+	case "fabric":
+		return []string{"fabric"}
+	case "quilt":
+		return []string{"quilt", "fabric"}
+	case "forge":
+		return []string{"forge"}
+	case "neoforge":
+		return []string{"neoforge"}
+	}
+	return nil
+}
+
+func cfLoader(l string) int {
+	switch l {
+	case "forge":
+		return 1
+	case "fabric", "quilt":
+		return 4
+	case "neoforge":
+		return 6
+	}
+	return 0
+}
+
+var cfClass = map[string]int{"mod": 6, "modpack": 4471, "resourcepack": 12, "shader": 6552, "datapack": 6945}
+
+type hit struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Icon        string `json:"icon"`
+	Author      string `json:"author"`
+	Downloads   int    `json:"downloads"`
+	Installed   bool   `json:"installed"`
+}
+
+// ---------- CurseForge ----------
+
+func cfDo(ctx context.Context, method, path string, body any, v any) error {
+	if cfKey == "" {
+		return errors.New("CurseForge: no API key in this build")
+	}
+	var rd io.Reader
+	if body != nil {
+		b, _ := json.Marshal(body)
+		rd = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, "https://api.curseforge.com/v1"+path, rd)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("x-api-key", cfKey)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "Mobilix-PC/"+appVersion)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := httpc.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("CurseForge HTTP %d", resp.StatusCode)
+	}
+	return json.NewDecoder(resp.Body).Decode(v)
+}
+
+type cfFile struct {
+	ID          int    `json:"id"`
+	ModID       int    `json:"modId"`
+	FileName    string `json:"fileName"`
+	DownloadURL string `json:"downloadUrl"`
+	Hashes      []struct {
+		Value string `json:"value"`
+		Algo  int    `json:"algo"`
+	} `json:"hashes"`
+	Dependencies []struct {
+		ModID int `json:"modId"`
+		Rel   int `json:"relationType"`
+	} `json:"dependencies"`
+}
+
+func (f cfFile) url() string {
+	if f.DownloadURL != "" {
+		return f.DownloadURL
+	}
+	return fmt.Sprintf("https://edge.forgecdn.net/files/%d/%d/%s", f.ID/1000, f.ID%1000, url.PathEscape(f.FileName))
+}
+
+func (f cfFile) sha1() string {
+	for _, h := range f.Hashes {
+		if h.Algo == 1 {
+			return strings.ToLower(h.Value)
+		}
+	}
+	return ""
+}
+
+// ---------- поиск ----------
 
 func (a *App) hCatSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
@@ -23,42 +220,201 @@ func (a *App) hCatSearch(w http.ResponseWriter, r *http.Request) {
 	if _, ok := typeDirs[typ]; !ok {
 		typ = "mod"
 	}
+	src := q.Get("src")
 	s := a.settings()
-	facets := [][]string{{"project_type:" + typ}}
-	if q.Get("filter") == "1" && s.Selected != "" {
-		facets = append(facets, []string{"versions:" + s.Selected})
-		if typ == "mod" && s.Loader == "fabric" {
-			facets = append(facets, []string{"categories:fabric"})
+	if src == "" {
+		src = s.ModSource
+	}
+	e := s.eff()
+	off, _ := strconv.Atoi(q.Get("offset"))
+	filter := q.Get("filter") == "1" && e.MC != ""
+	idx := readIdx(a.gameDirE(e))
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	var hits []hit
+	total := 0
+	if src == "curseforge" {
+		v := url.Values{}
+		v.Set("gameId", "432")
+		v.Set("classId", strconv.Itoa(cfClass[typ]))
+		v.Set("searchFilter", q.Get("q"))
+		v.Set("pageSize", "20")
+		v.Set("index", strconv.Itoa(off))
+		v.Set("sortField", "2")
+		v.Set("sortOrder", "desc")
+		if filter {
+			v.Set("gameVersion", e.MC)
+			if m := cfLoader(e.Loader); m > 0 && typ == "mod" {
+				v.Set("modLoaderType", strconv.Itoa(m))
+			}
+		}
+		var res struct {
+			Data []struct {
+				ID        int     `json:"id"`
+				Name      string  `json:"name"`
+				Summary   string  `json:"summary"`
+				Downloads float64 `json:"downloadCount"`
+				Logo      struct {
+					ThumbnailURL string `json:"thumbnailUrl"`
+				} `json:"logo"`
+				Authors []struct {
+					Name string `json:"name"`
+				} `json:"authors"`
+			} `json:"data"`
+			Pagination struct {
+				Total int `json:"totalCount"`
+			} `json:"pagination"`
+		}
+		if err := cfDo(ctx, "GET", "/mods/search?"+v.Encode(), nil, &res); err != nil {
+			jerr(w, 502, a.tr("CurseForge недоступен: ", "CurseForge unavailable: ")+err.Error())
+			return
+		}
+		for _, d := range res.Data {
+			h := hit{ID: strconv.Itoa(d.ID), Title: d.Name, Description: d.Summary, Icon: d.Logo.ThumbnailURL, Downloads: int(d.Downloads)}
+			if len(d.Authors) > 0 {
+				h.Author = d.Authors[0].Name
+			}
+			hits = append(hits, h)
+		}
+		total = res.Pagination.Total
+	} else {
+		facets := [][]string{{"project_type:" + typ}}
+		if filter {
+			facets = append(facets, []string{"versions:" + e.MC})
+			if typ == "mod" {
+				var cats []string
+				for _, l := range mrLoaders(e.Loader) {
+					cats = append(cats, "categories:"+l)
+				}
+				if len(cats) > 0 {
+					facets = append(facets, cats)
+				}
+			}
+		}
+		fb, _ := json.Marshal(facets)
+		var res struct {
+			Hits []struct {
+				ProjectID   string `json:"project_id"`
+				Title       string `json:"title"`
+				Description string `json:"description"`
+				IconURL     string `json:"icon_url"`
+				Author      string `json:"author"`
+				Downloads   int    `json:"downloads"`
+			} `json:"hits"`
+			Total int `json:"total_hits"`
+		}
+		p := fmt.Sprintf("/search?query=%s&facets=%s&limit=20&offset=%d", url.QueryEscape(q.Get("q")), url.QueryEscape(string(fb)), off)
+		if err := mrGet(ctx, s, p, &res); err != nil {
+			jerr(w, 502, a.tr("Каталог недоступен: ", "Catalog unavailable: ")+err.Error())
+			return
+		}
+		for _, d := range res.Hits {
+			hits = append(hits, hit{d.ProjectID, d.Title, d.Description, d.IconURL, d.Author, d.Downloads, false})
+		}
+		total = res.Total
+	}
+	for i := range hits {
+		for k := range idx {
+			if strings.HasPrefix(k, idxKey(src, typ, hits[i].ID, "")) {
+				hits[i].Installed = true
+			}
 		}
 	}
-	fb, _ := json.Marshal(facets)
-	off := 0
-	fmt.Sscanf(q.Get("offset"), "%d", &off)
-	u := fmt.Sprintf("%s/search?query=%s&facets=%s&limit=20&offset=%d", modrinth, url.QueryEscape(q.Get("q")), url.QueryEscape(string(fb)), off)
-	var res struct {
-		Hits []struct {
-			ProjectID   string `json:"project_id"`
-			Title       string `json:"title"`
-			Description string `json:"description"`
-			IconURL     string `json:"icon_url"`
-			Author      string `json:"author"`
-			Downloads   int    `json:"downloads"`
-			Slug        string `json:"slug"`
-		} `json:"hits"`
-		Total int `json:"total_hits"`
+	jw(w, map[string]any{"hits": hits, "total": total, "cf": cfKey != ""})
+}
+
+// ---------- установка ----------
+
+type fileRef struct{ url, name, sha1 string }
+
+// pickFile выбирает файл проекта под версию и загрузчик, а также его обязательные зависимости.
+func (a *App) pickFile(ctx context.Context, s Settings, e Eff, src, id, typ string) (fileRef, []string, error) {
+	if src == "curseforge" {
+		v := url.Values{}
+		v.Set("pageSize", "1")
+		if typ != "modpack" {
+			v.Set("gameVersion", e.MC)
+		}
+		if m := cfLoader(e.Loader); m > 0 && typ == "mod" {
+			v.Set("modLoaderType", strconv.Itoa(m))
+		}
+		var res struct {
+			Data []cfFile `json:"data"`
+		}
+		if err := cfDo(ctx, "GET", "/mods/"+id+"/files?"+v.Encode(), nil, &res); err != nil {
+			return fileRef{}, nil, err
+		}
+		if len(res.Data) == 0 {
+			return fileRef{}, nil, errors.New(a.tr("Нет файла для версии ", "No file for version ") + e.MC)
+		}
+		f := res.Data[0]
+		var deps []string
+		for _, d := range f.Dependencies {
+			if d.Rel == 3 {
+				deps = append(deps, strconv.Itoa(d.ModID))
+			}
+		}
+		return fileRef{f.url(), f.FileName, f.sha1()}, deps, nil
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
-	defer cancel()
-	if err := getJSON(ctx, u, &res); err != nil {
-		jerr(w, 502, a.tr("Каталог недоступен: ", "Catalog unavailable: ")+err.Error())
-		return
+	q := url.Values{}
+	if typ != "modpack" {
+		b, _ := json.Marshal([]string{e.MC})
+		q.Set("game_versions", string(b))
 	}
-	jw(w, res)
+	if ls := mrLoaders(e.Loader); len(ls) > 0 && typ == "mod" {
+		b, _ := json.Marshal(ls)
+		q.Set("loaders", string(b))
+	}
+	var vers []mrVersion
+	if err := mrGet(ctx, s, "/project/"+url.PathEscape(id)+"/version?"+q.Encode(), &vers); err != nil {
+		return fileRef{}, nil, err
+	}
+	if len(vers) == 0 {
+		return fileRef{}, nil, errors.New(a.tr("Нет файла для версии ", "No file for version ") + e.MC)
+	}
+	// при нескольких загрузчиках (Quilt: quilt+fabric) берём файл под первый подходящий
+	v := vers[0]
+	if ls := mrLoaders(e.Loader); len(ls) > 1 {
+		for _, l := range ls {
+			found := false
+			for _, x := range vers {
+				for _, vl := range x.Loaders {
+					if vl == l {
+						v, found = x, true
+						break
+					}
+				}
+				if found {
+					break
+				}
+			}
+			if found {
+				break
+			}
+		}
+	}
+	if len(v.Files) == 0 {
+		return fileRef{}, nil, errors.New("no files")
+	}
+	f := v.Files[0]
+	for _, x := range v.Files {
+		if x.Primary {
+			f = x
+		}
+	}
+	var deps []string
+	for _, d := range v.Dependencies {
+		if d.Type == "required" && d.ProjectID != "" {
+			deps = append(deps, d.ProjectID)
+		}
+	}
+	return fileRef{f.URL, f.Filename, f.Hashes.SHA1}, deps, nil
 }
 
 type mrVersion struct {
-	ID         string `json:"id"`
-	VersionNum string `json:"version_number"`
+	ID         string   `json:"id"`
+	VersionNum string   `json:"version_number"`
+	Loaders    []string `json:"loaders"`
 	Files      []struct {
 		URL      string `json:"url"`
 		Filename string `json:"filename"`
@@ -74,49 +430,38 @@ type mrVersion struct {
 	} `json:"dependencies"`
 }
 
-func (a *App) catDir(s Settings, typ string) string {
-	return filepath.Join(a.gameDir(s), typeDirs[typ])
-}
-
-func (a *App) installProject(ctx context.Context, s Settings, id, typ string, depth int, done map[string]bool) ([]string, error) {
+func (a *App) installProject(ctx context.Context, s Settings, e Eff, src, id, typ, world string, depth int, done map[string]bool) ([]string, error) {
 	if done[id] {
 		return nil, nil
 	}
 	done[id] = true
-	jarr := func(v string) string { b, _ := json.Marshal([]string{v}); return url.QueryEscape(string(b)) }
-	u := fmt.Sprintf("%s/project/%s/version?game_versions=%s", modrinth, url.PathEscape(id), jarr(s.Selected))
-	if typ == "mod" && s.Loader == "fabric" {
-		u += "&loaders=" + jarr("fabric")
-	}
-	var vers []mrVersion
-	if err := getJSON(ctx, u, &vers); err != nil {
+	f, deps, err := a.pickFile(ctx, s, e, src, id, typ)
+	if err != nil {
 		return nil, err
 	}
-	if len(vers) == 0 {
-		return nil, errors.New(a.tr("Нет файла для версии ", "No file for version ") + s.Selected)
-	}
-	v := vers[0]
-	if len(v.Files) == 0 {
-		return nil, errors.New("no files")
-	}
-	f := v.Files[0]
-	for _, x := range v.Files {
-		if x.Primary {
-			f = x
+	gdir := a.gameDirE(e)
+	rel := typeDirs[typ]
+	if typ == "datapack" {
+		if world == "" || world != filepath.Base(world) {
+			return nil, errors.New(a.tr("Выберите мир для датапака", "Pick a world for the datapack"))
 		}
+		rel = "saves/" + world + "/datapacks"
 	}
-	dir := a.catDir(s, typ)
-	name := filepath.Base(f.Filename)
-	if err := a.fetchFile(ctx, f.URL, filepath.Join(dir, name), f.Hashes.SHA1, 0, nil); err != nil {
+	name := filepath.Base(f.name)
+	if err := a.fetchFile(ctx, f.url, filepath.Join(gdir, filepath.FromSlash(rel), name), f.sha1, 0, nil); err != nil {
 		return nil, err
 	}
+	files := []string{rel + "/" + name}
+	a.idxUpdate(gdir, func(m map[string]idxEntry) {
+		k := idxKey(src, typ, id, world)
+		old := m[k]
+		m[k] = idxEntry{Name: name, Type: typ, World: world, Files: append(files, old.Files...)}
+	})
 	out := []string{name}
 	if depth < 1 && typ == "mod" {
-		for _, d := range v.Dependencies {
-			if d.Type == "required" && d.ProjectID != "" {
-				if got, err := a.installProject(ctx, s, d.ProjectID, "mod", depth+1, done); err == nil {
-					out = append(out, got...)
-				}
+		for _, d := range deps {
+			if got, err := a.installProject(ctx, s, e, src, d, "mod", "", depth+1, done); err == nil {
+				out = append(out, got...)
 			}
 		}
 	}
@@ -124,7 +469,7 @@ func (a *App) installProject(ctx context.Context, s Settings, id, typ string, de
 }
 
 func (a *App) hCatInstall(w http.ResponseWriter, r *http.Request) {
-	var b struct{ ID, Type string }
+	var b struct{ ID, Type, Src, World, Name string }
 	if readBody(r, &b) != nil || b.ID == "" {
 		jerr(w, 400, "bad request")
 		return
@@ -133,13 +478,26 @@ func (a *App) hCatInstall(w http.ResponseWriter, r *http.Request) {
 		b.Type = "mod"
 	}
 	s := a.settings()
-	if s.Selected == "" {
+	if b.Src == "" {
+		b.Src = s.ModSource
+	}
+	if b.Type == "modpack" {
+		err := a.startFn("pack", func(ctx context.Context) error { return a.installModpack(ctx, b.Src, b.ID, b.Name) })
+		if err != nil {
+			jerr(w, 409, err.Error())
+			return
+		}
+		jw(w, map[string]any{"job": true})
+		return
+	}
+	e := s.eff()
+	if e.MC == "" {
 		jerr(w, 400, a.tr("Сначала выберите версию игры", "Pick a game version first"))
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 	defer cancel()
-	files, err := a.installProject(ctx, s, b.ID, b.Type, 0, map[string]bool{})
+	files, err := a.installProject(ctx, s, e, b.Src, b.ID, b.Type, b.World, 0, map[string]bool{})
 	if err != nil {
 		jerr(w, 502, err.Error())
 		return
@@ -148,33 +506,71 @@ func (a *App) hCatInstall(w http.ResponseWriter, r *http.Request) {
 	jw(w, map[string]any{"files": files})
 }
 
+// hCatInstalled: файлы в папке выбранной установки (в т. ч. поставленные вручную).
 func (a *App) hCatInstalled(w http.ResponseWriter, r *http.Request) {
 	typ := r.URL.Query().Get("type")
-	if _, ok := typeDirs[typ]; !ok {
+	if _, ok := typeDirs[typ]; !ok || typeDirs[typ] == "" {
 		typ = "mod"
 	}
-	ents, _ := os.ReadDir(a.catDir(a.settings(), typ))
+	gdir := a.gameDirE(a.settings().eff())
 	out := []map[string]any{}
-	for _, e := range ents {
-		if e.IsDir() || strings.HasSuffix(e.Name(), ".part") {
-			continue
+	add := func(dir, world string) {
+		ents, _ := os.ReadDir(dir)
+		for _, e := range ents {
+			if strings.HasSuffix(e.Name(), ".part") || strings.HasPrefix(e.Name(), ".") {
+				continue
+			}
+			if e.IsDir() && typ != "shader" && typ != "resourcepack" && typ != "datapack" {
+				continue
+			}
+			info, _ := e.Info()
+			out = append(out, map[string]any{"name": e.Name(), "size": info.Size(), "world": world})
 		}
-		info, _ := e.Info()
-		out = append(out, map[string]any{"name": e.Name(), "size": info.Size()})
+	}
+	if typ == "datapack" {
+		ws, _ := os.ReadDir(filepath.Join(gdir, "saves"))
+		for _, w := range ws {
+			if w.IsDir() {
+				add(filepath.Join(gdir, "saves", w.Name(), "datapacks"), w.Name())
+			}
+		}
+	} else {
+		add(filepath.Join(gdir, typeDirs[typ]), "")
 	}
 	jw(w, map[string]any{"files": out})
 }
 
 func (a *App) hCatRemove(w http.ResponseWriter, r *http.Request) {
-	var b struct{ Type, Name string }
-	if readBody(r, &b) != nil || b.Name == "" || b.Name != filepath.Base(b.Name) {
+	var b struct{ Type, Name, World string }
+	if readBody(r, &b) != nil || b.Name == "" || b.Name != filepath.Base(b.Name) || b.World != filepath.Base(b.World) && b.World != "" {
 		jerr(w, 400, "bad request")
 		return
 	}
-	if _, ok := typeDirs[b.Type]; !ok {
+	if _, ok := typeDirs[b.Type]; !ok || typeDirs[b.Type] == "" {
 		jerr(w, 400, "bad type")
 		return
 	}
-	_ = os.Remove(filepath.Join(a.catDir(a.settings(), b.Type), b.Name))
+	gdir := a.gameDirE(a.settings().eff())
+	rel := typeDirs[b.Type]
+	if b.Type == "datapack" {
+		if b.World == "" {
+			jerr(w, 400, "world?")
+			return
+		}
+		rel = "saves/" + b.World + "/datapacks"
+	}
+	_ = os.RemoveAll(filepath.Join(gdir, filepath.FromSlash(rel), b.Name))
+	a.idxUpdate(gdir, func(map[string]idxEntry) {})
 	jw(w, map[string]any{"ok": true})
+}
+
+func (a *App) hWorlds(w http.ResponseWriter, r *http.Request) {
+	ents, _ := os.ReadDir(filepath.Join(a.gameDirE(a.settings().eff()), "saves"))
+	out := []string{}
+	for _, e := range ents {
+		if e.IsDir() {
+			out = append(out, e.Name())
+		}
+	}
+	jw(w, map[string]any{"worlds": out})
 }
