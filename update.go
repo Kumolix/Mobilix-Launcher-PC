@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -14,8 +15,10 @@ import (
 const updRepo = "Kumolix/Mobilix-Launcher-PC"
 
 type relInfo struct {
-	Tag    string `json:"tag_name"`
-	Assets []struct {
+	Tag        string `json:"tag_name"`
+	Draft      bool   `json:"draft"`
+	Prerelease bool   `json:"prerelease"`
+	Assets     []struct {
 		Name string `json:"name"`
 		URL  string `json:"browser_download_url"`
 	} `json:"assets"`
@@ -43,19 +46,61 @@ func (a *App) latestRelease(ctx context.Context) (relInfo, error) {
 	return r, err
 }
 
-func (a *App) checkUpdate() {
-	if a.settings().UpdMode == 0 {
-		return
+// verParts разбирает «v1.2.3» / «1.2.3» в числа; префиксы вроде «PC-» отбрасываются.
+func verParts(v string) []int {
+	v = strings.TrimSpace(v)
+	if i := strings.IndexAny(v, "0123456789"); i > 0 {
+		v = v[i:]
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	var out []int
+	for _, p := range strings.Split(v, ".") {
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			return nil
+		}
+		out = append(out, n)
+	}
+	return out
+}
+
+func verNewer(remote, cur string) bool {
+	r, c := verParts(remote), verParts(cur)
+	if r == nil || c == nil {
+		return false
+	}
+	for i := 0; i < len(r) || i < len(c); i++ {
+		var x, y int
+		if i < len(r) {
+			x = r[i]
+		}
+		if i < len(c) {
+			y = c[i]
+		}
+		if x != y {
+			return x > y
+		}
+	}
+	return false
+}
+
+// checkUpdate сообщает true, когда проверка завершена (даже если обновления нет), и false при сетевой ошибке — тогда её повторят позже.
+func (a *App) checkUpdate() bool {
+	if a.settings().UpdMode == 0 {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	r, err := a.latestRelease(ctx)
-	if err != nil || r.Tag == "" || strings.TrimPrefix(r.Tag, "v") == appVersion || updAsset(r) == "" {
-		return
+	if err != nil {
+		return false
+	}
+	if r.Draft || r.Prerelease || r.Tag == "" || !verNewer(r.Tag, appVersion) {
+		return true
 	}
 	a.mu.Lock()
 	a.updateTag = r.Tag
 	a.mu.Unlock()
+	return true
 }
 
 func cleanOld() {

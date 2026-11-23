@@ -203,6 +203,7 @@ function pollSoon() { clearTimeout(pollT); pollT = setTimeout(poll, 200); }
 async function poll() {
   try {
     STATUS = await api("status");
+    if ((STATUS.update || "") !== (S.update || "")) { S.update = STATUS.update || ""; renderChrome(); if (page === "upd" || page === "settings") renderPage(); }
     if (wasBusy && !STATUS.busy) {
       const st = await api("state"); S.installed = st.installed; S.settings = st.settings;
       renderChrome();
@@ -858,26 +859,33 @@ async function createBuild() {
 
 // --- сеть: ZeroTier One ---
 let ZT = null, ztTimer = 0;
-async function ztRefresh() { try { ZT = await api("zt/status"); } catch (e) { ZT = { installed: false }; } if (page === "net") renderPage(); renderFxBtns(); }
+// Статус опрашивается тихо: страница и меню перерисовываются только если статус реально изменился (или по явному действию).
+async function ztRefresh(force) {
+  let n; try { n = await api("zt/status"); } catch (e) { n = { installed: false }; }
+  const changed = JSON.stringify(n) !== JSON.stringify(ZT);
+  ZT = n;
+  if (changed || force === true) { if (page === "net") renderPage(); renderFxBtns(); }
+}
+function ztSchedule() { clearTimeout(ztTimer); ztTimer = setTimeout(async () => { if (page === "net") { await ztRefresh(); ztSchedule(); } else ztTimer = 0; }, 5000); }
 PAGES.net = () => {
-  if (!ZT) { ztRefresh(); return [h("div", { class: "empty" }, "…")]; }
-  clearTimeout(ztTimer); ztTimer = setTimeout(() => { if (page === "net") ztRefresh(); }, 4000);
+  if (!ZT) { ztRefresh(true).then(ztSchedule); return [h("div", { class: "empty" }, "…")]; }
+  if (!ztTimer) ztSchedule();
   const s = S.settings, out = [];
   if (!ZT.installed) {
     out.push(plain(row("ZeroTier One", t("Игра по сети работает поверх приложения ZeroTier One (виртуальная локальная сеть, как Radmin). Установите его, запустите и вернитесь сюда.", "Online play runs on top of ZeroTier One (a virtual LAN, like Radmin). Install it, start it and come back here."),
       h("button", { class: "btn pri", onclick: () => api("openurl", { url: "https://www.zerotier.com/download/" }) }, t("Скачать", "Download")),
-      h("button", { class: "btn", onclick: ztRefresh }, t("Проверить", "Check")))));
+      h("button", { class: "btn", onclick: () => ztRefresh(true) }, t("Проверить", "Check")))));
     return out;
   }
   out.push(plain(
     row(ZT.running ? (ZT.online ? "● " + t("Узел ZeroTier в сети", "ZeroTier node online") : "… " + t("Узел подключается", "Node is connecting")) : "○ " + t("ZeroTier One не запущен", "ZeroTier One is not running"),
       ZT.running ? t("ID вашего узла: ", "Your node ID: ") + ZT.address : t("Запустите ZeroTier One (служба или значок в трее).", "Start ZeroTier One (the service or the tray icon)."),
-      h("button", { class: "btn", onclick: ztRefresh }, t("Обновить", "Refresh"))),
+      h("button", { class: "btn", onclick: () => ztRefresh(true) }, t("Обновить", "Refresh"))),
     row(t("Кнопка на главном экране", "Button on the main screen"), t("Быстрое включение сохранённых сетей рядом со скином.", "Quickly switch saved networks on/off next to the skin."), sw(s.ztButton, async v => { await save({ ztButton: v }); renderFxBtns(); }))));
   const id = h("input", { type: "text", placeholder: t("ID сети (16 символов)", "Network ID (16 characters)"), maxlength: 16, spellcheck: "false", style: "width:210px" });
   const nm = h("input", { type: "text", placeholder: t("Название", "Name"), maxlength: 24, style: "width:150px" });
   out.push(plain(row(t("Добавить сеть", "Add a network"), t("ID создаёт хозяин сети на my.zerotier.com. После входа хозяин должен разрешить ваш узел.", "The network owner creates the ID on my.zerotier.com. After joining, the owner must authorise your node."),
-    id, nm, h("button", { class: "btn pri", onclick: async () => { try { await api("zt/join", { id: id.value.trim(), name: nm.value.trim() }); await refresh(); ztRefresh(); toast(t("Готово", "Done")); } catch (e) { toast(e.message); } } }, t("Войти", "Join")))));
+    id, nm, h("button", { class: "btn pri", onclick: async () => { try { await api("zt/join", { id: id.value.trim(), name: nm.value.trim() }); await refresh(); ztRefresh(true); toast(t("Готово", "Done")); } catch (e) { toast(e.message); } } }, t("Войти", "Join")))));
   const joined = new Map((ZT.nets || []).map(n => [n.id, n]));
   const list = h("div", { style: "margin-top:10px" });
   for (const n of s.ztNets || []) {
@@ -885,8 +893,8 @@ PAGES.net = () => {
     list.append(h("div", { class: "netnode" }, h("div", { class: "st" + (j && j.status === "OK" ? " ok" : "") }),
       h("div", { class: "ti" }, h("b", null, n.name || n.id), h("span", null, n.id + " · " + (j ? (j.status === "OK" ? (ip || "") : j.status === "ACCESS_DENIED" ? t("хозяин ещё не разрешил вход", "owner has not authorised you yet") : j.status) : t("не подключён", "not joined")))),
       ip ? h("button", { class: "btn", onclick: () => navigator.clipboard.writeText(ip).then(() => toast(t("IP скопирован", "IP copied"))) }, t("Копировать IP", "Copy IP")) : null,
-      j ? h("button", { class: "btn", onclick: async () => { await api("zt/leave", { id: n.id }); ztRefresh(); } }, t("Выйти", "Leave")) : h("button", { class: "btn pri", onclick: async () => { try { await api("zt/join", { id: n.id, name: n.name }); ztRefresh(); } catch (e) { toast(e.message); } } }, t("Войти", "Join")),
-      h("button", { class: "ib", title: t("Забыть", "Forget"), onclick: async () => { await api("zt/leave", { id: n.id, forget: true }); await refresh(); ztRefresh(); } }, "✕")));
+      j ? h("button", { class: "btn", onclick: async () => { await api("zt/leave", { id: n.id }); ztRefresh(true); } }, t("Выйти", "Leave")) : h("button", { class: "btn pri", onclick: async () => { try { await api("zt/join", { id: n.id, name: n.name }); ztRefresh(true); } catch (e) { toast(e.message); } } }, t("Войти", "Join")),
+      h("button", { class: "ib", title: t("Забыть", "Forget"), onclick: async () => { await api("zt/leave", { id: n.id, forget: true }); await refresh(); ztRefresh(true); } }, "✕")));
   }
   out.push(list);
   out.push(plain(row(t("Раздать мир друзьям", "Share my world"), t("В игре откройте мир для сети (Esc → Открыть для сети), затем скопируйте адрес и отправьте друзьям. Порт определяется по журналу игры.", "In the game choose Open to LAN, then copy the address and send it to friends. The port is read from the game log."),

@@ -237,7 +237,13 @@ func (a *App) routes() http.Handler {
 		})
 		jw(w, map[string]any{"settings": a.settings()})
 	})
-	a.api(mux, "/api/status", func(w http.ResponseWriter, r *http.Request) { jw(w, a.status()) })
+	a.api(mux, "/api/status", func(w http.ResponseWriter, r *http.Request) {
+		st := a.status()
+		a.mu.Lock()
+		st["update"] = a.updateTag
+		a.mu.Unlock()
+		jw(w, st)
+	})
 	a.api(mux, "/api/versions", a.hVersions)
 	a.api(mux, "/api/loaders", a.hLoaders)
 	a.api(mux, "/api/installed", func(w http.ResponseWriter, r *http.Request) { jw(w, map[string]any{"list": a.installedList()}) })
@@ -515,7 +521,14 @@ func main() {
 	_ = os.WriteFile(a.path("run.json"), rb, 0o644)
 	a.lg.add("[Mobilix] PC " + appVersion)
 	cleanOld()
-	go a.checkUpdate()
+	go func() {
+		for {
+			if a.checkUpdate() {
+				return
+			}
+			time.Sleep(30 * time.Minute)
+		}
+	}()
 	srv := &http.Server{Handler: a.routes()}
 	go func() { _ = srv.Serve(ln) }()
 	addr := fmt.Sprintf("127.0.0.1:%d", a.port)
