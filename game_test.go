@@ -61,3 +61,18 @@ func TestPackHelpers(t *testing.T) {
 		t.Fatal("mcMinor")
 	}
 }
+
+func TestSkinUUIDWidth(t *testing.T) {
+	for _, slim := range []bool{true, false} {
+		u := skinUUID("Steve", slim)
+		if len(u) != 36 {
+			t.Fatal(u)
+		}
+	}
+	if skinUUID("Steve", true) == skinUUID("Steve", false) {
+		t.Fatal("same uuid for both widths")
+	}
+	if packFormat("1.21.3") < 34 || packFormat("1.8.9") != 1 {
+		t.Fatal("packFormat")
+	}
+}

@@ -32,19 +32,62 @@ func modrinthBases(s Settings) []string {
 	return append(out, modrinthOfficial)
 }
 
+var (
+	mrCacheMu sync.Mutex
+	mrCache   = map[string]mrCached{}
+)
+
+type mrCached struct {
+	at time.Time
+	b  []byte
+}
+
+// mrGet опрашивает зеркало и официальный API одновременно и берёт первый успешный ответ; ответы кэшируются на 5 минут.
 func mrGet(ctx context.Context, s Settings, path string, v any) error {
+	bases := modrinthBases(s)
+	mrCacheMu.Lock()
+	if c, ok := mrCache[path]; ok && time.Since(c.at) < 5*time.Minute {
+		mrCacheMu.Unlock()
+		return json.Unmarshal(c.b, v)
+	}
+	mrCacheMu.Unlock()
+	rctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	defer cancel()
+	type res struct {
+		b   []byte
+		err error
+	}
+	ch := make(chan res, len(bases))
+	for _, b := range bases {
+		go func(b string) {
+			resp, err := httpGet(rctx, b+path)
+			if err != nil {
+				ch <- res{nil, err}
+				return
+			}
+			defer resp.Body.Close()
+			bb, err := io.ReadAll(resp.Body)
+			ch <- res{bb, err}
+		}(b)
+	}
 	var last error
-	for _, b := range modrinthBases(s) {
-		cctx, cancel := context.WithTimeout(ctx, 25*time.Second)
-		err := getJSONNoMirror(cctx, b+path, v)
-		cancel()
-		if err == nil {
-			return nil
+	for range bases {
+		r := <-ch
+		if r.err == nil && json.Valid(r.b) {
+			mrCacheMu.Lock()
+			if len(mrCache) > 200 {
+				mrCache = map[string]mrCached{}
+			}
+			mrCache[path] = mrCached{time.Now(), r.b}
+			mrCacheMu.Unlock()
+			return json.Unmarshal(r.b, v)
 		}
-		last = err
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if r.err != nil {
+			last = r.err
 		}
+	}
+	if last == nil {
+		last = errors.New("bad response")
 	}
 	return last
 }
@@ -147,6 +190,7 @@ type hit struct {
 	Author      string `json:"author"`
 	Downloads   int    `json:"downloads"`
 	Installed   bool   `json:"installed"`
+	Installing  bool   `json:"installing"`
 }
 
 // ---------- CurseForge ----------
@@ -225,7 +269,7 @@ func (a *App) hCatSearch(w http.ResponseWriter, r *http.Request) {
 	if src == "" {
 		src = s.ModSource
 	}
-	e := s.eff()
+	e := s.effFor(q.Get("build"))
 	off, _ := strconv.Atoi(q.Get("offset"))
 	filter := q.Get("filter") == "1" && e.MC != ""
 	idx := readIdx(a.gameDirE(e))
@@ -309,10 +353,17 @@ func (a *App) hCatSearch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, d := range res.Hits {
-			hits = append(hits, hit{d.ProjectID, d.Title, d.Description, d.IconURL, d.Author, d.Downloads, false})
+			hits = append(hits, hit{d.ProjectID, d.Title, d.Description, d.IconURL, d.Author, d.Downloads, false, false})
 		}
 		total = res.Total
 	}
+	catJobs.Lock()
+	for i := range hits {
+		if catJobs.m[jobKey(src, typ, hits[i].ID, "")] == "busy" {
+			hits[i].Installing = true
+		}
+	}
+	catJobs.Unlock()
 	for i := range hits {
 		for k := range idx {
 			if strings.HasPrefix(k, idxKey(src, typ, hits[i].ID, "")) {
@@ -468,8 +519,29 @@ func (a *App) installProject(ctx context.Context, s Settings, e Eff, src, id, ty
 	return out, nil
 }
 
+// фоновые установки из каталога: не привязаны к запросу и не отменяются при смене вкладки
+var catJobs = struct {
+	sync.Mutex
+	m map[string]string
+}{m: map[string]string{}}
+
+func jobKey(src, typ, id, world string) string { return idxKey(src, typ, id, world) }
+
+func (a *App) hCatActive(w http.ResponseWriter, r *http.Request) {
+	catJobs.Lock()
+	out := map[string]string{}
+	for k, v := range catJobs.m {
+		out[k] = v
+		if v != "busy" {
+			delete(catJobs.m, k) // готовое и ошибки отдаются один раз
+		}
+	}
+	catJobs.Unlock()
+	jw(w, out)
+}
+
 func (a *App) hCatInstall(w http.ResponseWriter, r *http.Request) {
-	var b struct{ ID, Type, Src, World, Name string }
+	var b struct{ ID, Type, Src, World, Name, Icon, Build string }
 	if readBody(r, &b) != nil || b.ID == "" {
 		jerr(w, 400, "bad request")
 		return
@@ -482,7 +554,7 @@ func (a *App) hCatInstall(w http.ResponseWriter, r *http.Request) {
 		b.Src = s.ModSource
 	}
 	if b.Type == "modpack" {
-		err := a.startFn("pack", func(ctx context.Context) error { return a.installModpack(ctx, b.Src, b.ID, b.Name) })
+		err := a.startFn("pack", func(ctx context.Context) error { return a.installModpack(ctx, b.Src, b.ID, b.Name, b.Icon) })
 		if err != nil {
 			jerr(w, 409, err.Error())
 			return
@@ -490,20 +562,35 @@ func (a *App) hCatInstall(w http.ResponseWriter, r *http.Request) {
 		jw(w, map[string]any{"job": true})
 		return
 	}
-	e := s.eff()
+	e := s.effFor(b.Build)
 	if e.MC == "" {
 		jerr(w, 400, a.tr("Сначала выберите версию игры", "Pick a game version first"))
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
-	defer cancel()
-	files, err := a.installProject(ctx, s, e, b.Src, b.ID, b.Type, b.World, 0, map[string]bool{})
-	if err != nil {
-		jerr(w, 502, err.Error())
+	key := jobKey(b.Src, b.Type, b.ID, b.World)
+	catJobs.Lock()
+	if catJobs.m[key] == "busy" {
+		catJobs.Unlock()
+		jw(w, map[string]any{"queued": true})
 		return
 	}
-	a.lg.add("[Mobilix] " + a.tr("Установлено: ", "Installed: ") + strings.Join(files, ", "))
-	jw(w, map[string]any{"files": files})
+	catJobs.m[key] = "busy"
+	catJobs.Unlock()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		defer cancel()
+		files, err := a.installProject(ctx, s, e, b.Src, b.ID, b.Type, b.World, 0, map[string]bool{})
+		catJobs.Lock()
+		if err != nil {
+			catJobs.m[key] = "error:" + err.Error()
+			a.lg.add("[Mobilix] " + a.tr("Каталог: ", "Catalog: ") + err.Error())
+		} else {
+			catJobs.m[key] = "done"
+			a.lg.add("[Mobilix] " + a.tr("Установлено: ", "Installed: ") + strings.Join(files, ", "))
+		}
+		catJobs.Unlock()
+	}()
+	jw(w, map[string]any{"queued": true})
 }
 
 // hCatInstalled: файлы в папке выбранной установки (в т. ч. поставленные вручную).
@@ -512,7 +599,7 @@ func (a *App) hCatInstalled(w http.ResponseWriter, r *http.Request) {
 	if _, ok := typeDirs[typ]; !ok || typeDirs[typ] == "" {
 		typ = "mod"
 	}
-	gdir := a.gameDirE(a.settings().eff())
+	gdir := a.gameDirE(a.settings().effFor(r.URL.Query().Get("build")))
 	out := []map[string]any{}
 	add := func(dir, world string) {
 		ents, _ := os.ReadDir(dir)
@@ -541,7 +628,7 @@ func (a *App) hCatInstalled(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) hCatRemove(w http.ResponseWriter, r *http.Request) {
-	var b struct{ Type, Name, World string }
+	var b struct{ Type, Name, World, Build string }
 	if readBody(r, &b) != nil || b.Name == "" || b.Name != filepath.Base(b.Name) || b.World != filepath.Base(b.World) && b.World != "" {
 		jerr(w, 400, "bad request")
 		return
@@ -550,7 +637,7 @@ func (a *App) hCatRemove(w http.ResponseWriter, r *http.Request) {
 		jerr(w, 400, "bad type")
 		return
 	}
-	gdir := a.gameDirE(a.settings().eff())
+	gdir := a.gameDirE(a.settings().effFor(b.Build))
 	rel := typeDirs[b.Type]
 	if b.Type == "datapack" {
 		if b.World == "" {
@@ -565,7 +652,7 @@ func (a *App) hCatRemove(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) hWorlds(w http.ResponseWriter, r *http.Request) {
-	ents, _ := os.ReadDir(filepath.Join(a.gameDirE(a.settings().eff()), "saves"))
+	ents, _ := os.ReadDir(filepath.Join(a.gameDirE(a.settings().effFor(r.URL.Query().Get("build"))), "saves"))
 	out := []string{}
 	for _, e := range ents {
 		if e.IsDir() {

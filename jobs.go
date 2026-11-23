@@ -12,6 +12,14 @@ import (
 // У каждой связки «версия + загрузчик» и у каждой сборки своя папка с модами и мирами.
 type Eff struct{ MC, Loader, LoaderVer, Key string }
 
+// effFor: установка для заданной сборки (id) или выбранная сейчас, если id пустой.
+func (s Settings) effFor(build string) Eff {
+	if build != "" {
+		s.Build = build
+	}
+	return s.eff()
+}
+
 func (s Settings) eff() Eff {
 	if s.Build != "" {
 		for _, b := range s.Builds {

@@ -97,7 +97,10 @@ func (a *App) addBuild(name, mc, loader, lver string) Build {
 func (a *App) buildDir(id string) string { return a.path("instances", "build-"+id) }
 
 // finishPack: сборка выбирается и скачивается (профиль, библиотеки, загрузчик).
-func (a *App) finishPack(ctx context.Context, b Build) error {
+func (a *App) finishPack(ctx context.Context, b Build, icon string) error {
+	if icon != "" {
+		_ = a.fetchFile(ctx, icon, filepath.Join(a.buildDir(b.ID), "mobilix-icon.png"), "", 0, nil)
+	}
 	a.saveSettings(func(s *Settings) { s.Build = b.ID })
 	a.lg.add("[Mobilix] " + a.tr("Сборка создана: ", "Build created: ") + b.Name)
 	return a.runJob(ctx, "install")
@@ -125,7 +128,7 @@ func loaderFromDeps(d map[string]string) (string, string) {
 	return "vanilla", ""
 }
 
-func (a *App) installMrpack(ctx context.Context, path, nameHint string) error {
+func (a *App) installMrpack(ctx context.Context, path, nameHint, icon string) error {
 	zr, err := zip.OpenReader(path)
 	if err != nil {
 		return err
@@ -161,7 +164,7 @@ func (a *App) installMrpack(ctx context.Context, path, nameHint string) error {
 			return err
 		}
 	}
-	return a.finishPack(ctx, b)
+	return a.finishPack(ctx, b, icon)
 }
 
 // ---------- CurseForge zip ----------
@@ -182,7 +185,7 @@ type cfManifest struct {
 	} `json:"files"`
 }
 
-func (a *App) installCFPack(ctx context.Context, path, nameHint string) error {
+func (a *App) installCFPack(ctx context.Context, path, nameHint, icon string) error {
 	zr, err := zip.OpenReader(path)
 	if err != nil {
 		return err
@@ -252,7 +255,7 @@ func (a *App) installCFPack(ctx context.Context, path, nameHint string) error {
 	if err := extractPrefix(zr, strings.TrimSuffix(ov, "/")+"/", gdir); err != nil {
 		return err
 	}
-	return a.finishPack(ctx, b)
+	return a.finishPack(ctx, b, icon)
 }
 
 // ---------- сборка Mobilix ----------
@@ -264,7 +267,7 @@ type mobilixPack struct {
 	LoaderVer string `json:"loaderVer"`
 }
 
-func (a *App) installMobilixPack(ctx context.Context, path, nameHint string) error {
+func (a *App) installMobilixPack(ctx context.Context, path, nameHint, icon string) error {
 	zr, err := zip.OpenReader(path)
 	if err != nil {
 		return err
@@ -281,11 +284,11 @@ func (a *App) installMobilixPack(ctx context.Context, path, nameHint string) err
 	if err := extractPrefix(zr, "game/", a.buildDir(b.ID)); err != nil {
 		return err
 	}
-	return a.finishPack(ctx, b)
+	return a.finishPack(ctx, b, icon)
 }
 
 // installPackFile определяет формат по содержимому архива.
-func (a *App) installPackFile(ctx context.Context, path, nameHint string) error {
+func (a *App) installPackFile(ctx context.Context, path, nameHint, icon string) error {
 	zr, err := zip.OpenReader(path)
 	if err != nil {
 		return errors.New(a.tr("Это не архив сборки", "Not a pack archive"))
@@ -302,17 +305,17 @@ func (a *App) installPackFile(ctx context.Context, path, nameHint string) error 
 	zr.Close()
 	switch {
 	case mx:
-		return a.installMobilixPack(ctx, path, nameHint)
+		return a.installMobilixPack(ctx, path, nameHint, icon)
 	case mr:
-		return a.installMrpack(ctx, path, nameHint)
+		return a.installMrpack(ctx, path, nameHint, icon)
 	case cf:
-		return a.installCFPack(ctx, path, nameHint)
+		return a.installCFPack(ctx, path, nameHint, icon)
 	}
 	return errors.New(a.tr("Неизвестный формат сборки", "Unknown pack format"))
 }
 
 // installModpack: сборка из каталога (Modrinth или CurseForge).
-func (a *App) installModpack(ctx context.Context, src, id, name string) error {
+func (a *App) installModpack(ctx context.Context, src, id, name, icon string) error {
 	s := a.settings()
 	f, _, err := a.pickFile(ctx, s, Eff{}, src, id, "modpack")
 	if err != nil {
@@ -324,7 +327,7 @@ func (a *App) installModpack(ctx context.Context, src, id, name string) error {
 	if err := a.fetchFile(ctx, f.url, tmp, f.sha1, 0, nil); err != nil {
 		return err
 	}
-	return a.installPackFile(ctx, tmp, name)
+	return a.installPackFile(ctx, tmp, name, icon)
 }
 
 // ---------- экспорт ----------
@@ -475,7 +478,7 @@ func (a *App) hImport(w http.ResponseWriter, r *http.Request) {
 		nm := strings.TrimSuffix(strings.TrimSuffix(name, ".zip"), ".mrpack")
 		err := a.startFn("pack", func(ctx context.Context) error {
 			defer os.Remove(tmp)
-			return a.installPackFile(ctx, tmp, nm)
+			return a.installPackFile(ctx, tmp, nm, "")
 		})
 		if err != nil {
 			os.Remove(tmp)
@@ -486,7 +489,7 @@ func (a *App) hImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer os.Remove(tmp)
-	e := a.settings().eff()
+	e := a.settings().effFor(q.Get("build"))
 	gdir := a.gameDirE(e)
 	if typ == "world" {
 		zr, err := zip.OpenReader(tmp)
@@ -558,3 +561,29 @@ func copyTree2(src, dst string) error {
 
 var _ = fmt.Sprint
 var _ = url.QueryEscape
+
+// иконка сборки: из каталога или выбранная вручную
+func (a *App) hBuildIcon(w http.ResponseWriter, r *http.Request) {
+	id := filepath.Base(r.URL.Query().Get("id"))
+	f := filepath.Join(a.buildDir(id), "mobilix-icon.png")
+	if r.Method == "POST" {
+		b, _ := io.ReadAll(io.LimitReader(r.Body, 4<<20))
+		if len(b) < 16 {
+			jerr(w, 400, "bad image")
+			return
+		}
+		if err := os.WriteFile(f, b, 0o644); err != nil {
+			jerr(w, 500, err.Error())
+			return
+		}
+		jw(w, map[string]any{"ok": true})
+		return
+	}
+	b, err := os.ReadFile(f)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-cache")
+	_, _ = w.Write(b)
+}

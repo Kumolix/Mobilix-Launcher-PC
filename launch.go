@@ -40,6 +40,12 @@ func (a *App) launch(ctx context.Context, v *Version, s Settings, e Eff, java st
 	}
 
 	a.applyGraphics(gdir, e.MC, s)
+	a.applySkinPack(gdir, e.MC, s)
+	if utype == "legacy" && s.SkinSrc == "file" {
+		if _, err := os.Stat(a.customSkinPath()); err == nil {
+			uuid = skinUUID(name, s.SkinModel == 2)
+		}
+	}
 
 	// Ely.by: authlib-injector подменяет сервера авторизации
 	var agent []string

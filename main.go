@@ -25,7 +25,7 @@ import (
 //go:embed ui
 var uiFS embed.FS
 
-const appVersion = "1.1.0"
+const appVersion = "1.1.1"
 const fixedPort = 52871
 
 func itoa(n int) string { return strconv.Itoa(n) }
@@ -83,6 +83,10 @@ type Settings struct {
 	Mip         int      `json:"mip"`    // -1 не менять
 	CThemes     []CTheme `json:"cThemes"`
 	CSel        int      `json:"cSel"` // -1 встроенная тема
+	ZtNets      []ZtNet  `json:"ztNets"`
+	ZtButton    bool     `json:"ztButton"` // кнопка ZeroTier на главном экране
+	ZtOn        bool     `json:"ztOn"`
+	FxOn        bool     `json:"fxOn"` // праздничные эффекты
 }
 
 const defaultMirrorAPI = "https://api.modrinth.black/v2"
@@ -91,7 +95,7 @@ func defaultSettings() Settings {
 	return Settings{Lang: "ru", Style: "new", MenuType: "bottom", Aurora: true, Nick: "Player", SkinSrc: "mojang",
 		RamMB: 4096, MemAuto: true, Threads: 8, Isolate: true, Loader: "vanilla", UpdMode: 1, ModAuto: true,
 		WorldBackup: true, Mirrors: true, MirrorAPI: defaultMirrorAPI, ModSource: "modrinth", Corelix: true,
-		Mip: -1, CSel: -1, Builds: []Build{}, CThemes: []CTheme{}}
+		Mip: -1, CSel: -1, Builds: []Build{}, CThemes: []CTheme{}, ZtNets: []ZtNet{}, FxOn: true}
 }
 
 type App struct {
@@ -240,6 +244,9 @@ func (a *App) routes() http.Handler {
 	a.api(mux, "/api/build/create", a.hBuildCreate)
 	a.api(mux, "/api/build/delete", a.hBuildDelete)
 	a.api(mux, "/api/build/dup", a.hBuildDup)
+	a.api(mux, "/api/build/icon", a.hBuildIcon)
+	a.api(mux, "/api/catalog/active", a.hCatActive)
+	a.ztRoutes(mux)
 	a.api(mux, "/api/build/export", a.hBuildExport)
 	a.api(mux, "/api/import", a.hImport)
 	a.api(mux, "/api/worlds", a.hWorlds)
@@ -369,7 +376,7 @@ func (a *App) routes() http.Handler {
 		}
 		_ = readBody(r, &b)
 		u, err := url.Parse(b.URL)
-		ok := map[string]bool{"t.me": true, "github.com": true, "modrinth.com": true, "www.tiktok.com": true, "kumolix.github.io": true, "ely.by": true, "account.ely.by": true}
+		ok := map[string]bool{"t.me": true, "github.com": true, "modrinth.com": true, "www.tiktok.com": true, "kumolix.github.io": true, "ely.by": true, "www.zerotier.com": true, "my.zerotier.com": true, "account.ely.by": true}
 		if err != nil || u.Scheme != "https" || !ok[u.Host] {
 			jerr(w, 400, "url not allowed")
 			return

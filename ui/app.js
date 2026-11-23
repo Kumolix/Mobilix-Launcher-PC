@@ -1,6 +1,7 @@
 "use strict";
 // ---------- базовое ----------
 const KEY = new URLSearchParams(location.search).get("k") || sessionStorage.getItem("k") || "";
+try { const fxp = new URLSearchParams(location.search).get("fx"); if (fxp) sessionStorage.setItem("fxForce", fxp); } catch (e) {}
 try { sessionStorage.setItem("k", KEY); history.replaceState(null, "", location.pathname); } catch (e) {}
 const $ = s => document.querySelector(s);
 let S = null;                       // состояние с сервера
@@ -72,6 +73,8 @@ function applyTheme() {
   const light = cu ? lum(p.bg) > .5 : s.light;
   r.setProperty("--shadow", light ? "rgba(0,0,0,.22)" : "rgba(0,0,0,.45)");
   $("#aurora").classList.toggle("off", !s.aurora);
+  const tint = cu ? p.accent : null;
+  if (window.ICON_TINT !== tint) { window.ICON_TINT = tint; try { buildMenus(); renderFxBtns(); } catch (e) {} }
 }
 function lum(hex) { const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255); return .2126 * r + .7152 * g + .0722 * b; }
 
@@ -84,9 +87,10 @@ async function save(patch) {
 // ---------- меню ----------
 const MENU = [
   { id: "account", ru: "Аккаунт", en: "Account", ico: "USER" },
-  { id: "settings", ru: "Настройки", en: "Settings", ico: "GEAR" },
   { id: "downloads", ru: "Загрузки", en: "Downloads", ico: "VERS" },
+  { id: "net", ru: "Сеть", en: "Network", ico: "NET" },
   { id: "social", ru: "Соцсети", en: "Social", ico: "CHAT" },
+  { id: "settings", ru: "Настройки", en: "Settings", ico: "GEAR" },
   { id: "wipe", ru: "Удалить скачанное", en: "Delete downloads", ico: "TRASH", pal: TRASH_PAL },
   { id: "lang", ru: "Язык", en: "Language", ico: "GLOBE", badge: true },
 ];
@@ -161,7 +165,7 @@ function renderChrome() {
   $("#loginTag").textContent = loginLabel();
   $("#skinLoad").textContent = t("загрузка скина…", "loading skin…");
   const vl = $("#verLabel");
-  vl.textContent = "PC " + S.version + (S.update ? " · " + t("доступно обновление ", "update available ") + S.update : "");
+  vl.textContent = "PC " + S.version + " · Kumolix" + (S.update ? " · " + t("доступно обновление ", "update available ") + S.update : "");
   vl.classList.toggle("upd", !!S.update);
   $("#verBtn").textContent = verTitle();
   $("#tabLatest").textContent = t("Последний", "Latest");
@@ -169,6 +173,7 @@ function renderChrome() {
   $("#tabCopy").textContent = t("Копировать", "Copy");
   $("#tabStop").textContent = t("Остановить игру", "Stop game");
   renderStatus();
+  renderFxBtns();
 }
 
 function renderStatus() {
@@ -330,10 +335,10 @@ async function loadSkin() {
 }
 
 // ---------- страницы ----------
-const TITLES = { account: ["Аккаунт", "Account"], settings: ["Настройки", "Settings"], downloads: ["Загрузки", "Downloads"], social: ["Соцсети", "Social"] };
+const TITLES = { net: ["Игра по сети", "Online over LAN"], buildcat: ["Каталог сборки", "Build catalog"], account: ["Аккаунт", "Account"], settings: ["Настройки", "Settings"], downloads: ["Загрузки", "Downloads"], social: ["Соцсети", "Social"] };
 
 function openPage(id) { page = id; buildMenus(); renderPage(); }
-function closePage() { page = null; $("#pageLayer").classList.add("hidden"); $("#pageLayer").innerHTML = ""; buildMenus(); }
+function closePage() { page = null; catBuild = ""; $("#pageLayer").classList.add("hidden"); $("#pageLayer").innerHTML = ""; buildMenus(); }
 
 function renderPage() {
   if (!page) return;
@@ -631,7 +636,8 @@ function themeEditor(idx) {
 let dlTab = "versions";
 PAGES.downloads = () => {
   const T = [["versions", t("Версии", "Versions")], ["catalog", t("Каталог", "Catalog")], ["builds", t("Сборки", "Builds")]];
-  return [tabs(T, dlTab, v => { dlTab = v; renderPage(); }), TABS[dlTab]()];
+  const tb = tabs(T, dlTab, v => { dlTab = v; renderPage(); }); tb.classList.add("top");
+  return [tb, TABS[dlTab]()];
 };
 const TABS = {};
 
@@ -700,7 +706,8 @@ function installModal(mc, forBuild) {
 }
 
 // каталог
-let catType = "mod", catQ = "", catFilter = true, catSrc = null;
+let catType = "mod", catQ = "", catFilter = true, catSrc = null, catBuild = "";
+const bq = () => catBuild ? "&build=" + encodeURIComponent(catBuild) : "";
 TABS.catalog = () => {
   const s = S.settings;
   if (!catSrc) catSrc = s.modSource === "curseforge" && S.cf ? "curseforge" : "modrinth";
@@ -708,7 +715,7 @@ TABS.catalog = () => {
   const types = [["mod", t("Моды", "Mods")], ["modpack", t("Сборки", "Modpacks")], ["resourcepack", t("Ресурспаки", "Resource packs")], ["shader", t("Шейдеры", "Shaders")], ["datapack", t("Датапаки", "Datapacks")], ["installed", t("Установлено", "Installed")]];
   const srcs = [["modrinth", "Modrinth"], ["curseforge", "CurseForge"]];
   const q = h("input", { type: "search", placeholder: t("Поиск…", "Search…"), value: catQ, onkeydown: e => { if (e.key === "Enter") { catQ = q.value; run(true); } } });
-  const e0 = s.build ? (s.builds || []).find(b => b.id === s.build) : null;
+  const e0 = (catBuild || s.build) ? (s.builds || []).find(b => b.id === (catBuild || s.build)) : null;
   const target = e0 ? e0.name : (s.selected ? instTitle(s.selected, s.loader) : t("выбранной версии", "the selected version"));
   const filt = h("div", { class: "row", style: "border:0;padding:4px 0" }, h("div", { class: "l" }, t("Только для ", "Only for ") + target), h("div", { class: "c" }, sw(catFilter, v => { catFilter = v; run(true); })));
   let off = 0;
@@ -720,20 +727,23 @@ TABS.catalog = () => {
     if (catSrc === "curseforge" && !S.cf) { res.append(h("div", { class: "empty" }, t("CurseForge недоступен в этой сборке лаунчера.", "CurseForge is not available in this launcher build."))); return; }
     res.append(h("div", { class: "empty", id: "cload" }, "…"));
     try {
-      const r = await api("catalog/search?src=" + catSrc + "&type=" + catType + "&q=" + encodeURIComponent(catQ) + "&filter=" + (catFilter ? 1 : 0) + "&offset=" + off);
+      const r = await api("catalog/search?src=" + catSrc + "&type=" + catType + "&q=" + encodeURIComponent(catQ) + "&filter=" + (catFilter ? 1 : 0) + "&offset=" + off + bq());
       $("#cload") && $("#cload").remove();
       if (!r.hits.length && !off) res.append(h("div", { class: "empty" }, t("Ничего не найдено", "Nothing found")));
       for (const x of r.hits) {
-        const btn = h("button", { class: "btn " + (x.installed ? "ok" : "pri"), disabled: x.installed }, x.installed ? "✓ " + t("Установлено", "Installed") : (catType === "modpack" ? t("Скачать сборку", "Get pack") : t("Установить", "Install")));
+        const lbl = catType === "modpack" ? t("Скачать сборку", "Get pack") : t("Установить", "Install");
+        const btn = h("button", { class: "btn " + (x.installed ? "ok" : "pri"), disabled: x.installed || x.installing }, x.installed ? "✓ " + t("Установлено", "Installed") : x.installing ? "…" : lbl);
+        const key = catSrc + ":" + catType + ":" + x.id;
+        if (x.installing) watchCat(key, btn, lbl);
         btn.onclick = async () => {
           let world = "";
           if (catType === "datapack") { world = await chooseWorld(); if (!world) return; }
           btn.disabled = true; btn.textContent = "…";
           try {
-            const j = await api("catalog/install", { id: x.id, type: catType, src: catSrc, world, name: x.title });
-            if (j.job) { pollSoon(); toast(t("Сборка скачивается…", "Downloading the pack…")); btn.textContent = "…"; }
-            else { btn.className = "btn ok"; btn.textContent = "✓ " + t("Установлено", "Installed"); }
-          } catch (e) { btn.disabled = false; btn.textContent = t("Установить", "Install"); toast(e.message); }
+            const j = await api("catalog/install", { id: x.id, type: catType, src: catSrc, world, name: x.title, icon: x.icon, build: catBuild });
+            if (j.job) { pollSoon(); toast(t("Сборка скачивается — прогресс внизу, можно переходить по вкладкам", "Downloading the pack — progress is at the bottom, you can browse freely")); btn.textContent = "✓ " + t("Запущено", "Started"); }
+            else watchCat(key + (world ? ":" + world : ""), btn, lbl);
+          } catch (e) { btn.disabled = false; btn.textContent = lbl; toast(e.message); }
         };
         res.append(h("div", { class: "cat" }, x.icon ? h("img", { src: x.icon, loading: "lazy" }) : h("div", { class: "noimg" }),
           h("div", { class: "ti" }, h("b", null, x.title), h("span", null, x.description), h("span", null, x.author)),
@@ -746,19 +756,19 @@ TABS.catalog = () => {
   async function runInstalled() {
     res.innerHTML = "";
     for (const [ty, label, acc] of [["mod", t("Моды", "Mods"), ".jar,.zip"], ["resourcepack", t("Ресурспаки", "Resource packs"), ".zip"], ["shader", t("Шейдеры", "Shaders"), ".zip"], ["datapack", t("Датапаки", "Datapacks"), ".zip"]]) {
-      const r = await api("catalog/installed?type=" + ty);
+      const r = await api("catalog/installed?type=" + ty + bq());
       res.append(h("div", { style: "display:flex;align-items:center;justify-content:space-between" }, h("h3", { class: "sec" }, label),
         h("button", { class: "btn", onclick: async () => {
           let world = ""; if (ty === "datapack") { world = await chooseWorld(); if (!world) return; }
-          pickFile(acc, async f => { try { await upload(ty, f, world ? "&world=" + encodeURIComponent(world) : ""); toast(t("Файл добавлен", "File added")); runInstalled(); } catch (e) { toast(e.message); } });
+          pickFile(acc, async f => { try { await upload(ty, f, (world ? "&world=" + encodeURIComponent(world) : "") + bq()); toast(t("Файл добавлен", "File added")); runInstalled(); } catch (e) { toast(e.message); } });
         } }, "+ " + t("Добавить файл", "Add file"))));
       if (!r.files.length) res.append(h("div", { class: "note" }, t("Пусто", "Empty")));
       for (const f of r.files) {
         res.append(h("div", { class: "cat" }, h("div", { class: "ti" }, h("b", null, f.name), h("span", null, (f.world ? f.world + " · " : "") + (f.size / 1048576).toFixed(2) + " MB")),
-          h("button", { class: "btn dng", onclick: async () => { await api("catalog/remove", { type: ty, name: f.name, world: f.world }); runInstalled(); } }, t("Удалить", "Remove"))));
+          h("button", { class: "btn dng", onclick: async () => { await api("catalog/remove", { type: ty, name: f.name, world: f.world, build: catBuild }); runInstalled(); } }, t("Удалить", "Remove"))));
       }
     }
-    res.append(h("h3", { class: "sec" }, t("Миры", "Worlds")), h("button", { class: "btn", onclick: () => pickFile(".zip", async f => { try { await upload("world", f); toast(t("Мир добавлен", "World added")); } catch (e) { toast(e.message); } }) }, "+ " + t("Импорт мира (zip)", "Import a world (zip)")));
+    res.append(h("h3", { class: "sec" }, t("Миры", "Worlds")), h("button", { class: "btn", onclick: () => pickFile(".zip", async f => { try { await upload("world", f, bq()); toast(t("Мир добавлен", "World added")); } catch (e) { toast(e.message); } }) }, "+ " + t("Импорт мира (zip)", "Import a world (zip)")));
   }
   more.onclick = () => run(false);
   const setVis = () => { const inst = catType === "installed"; filt.classList.toggle("hidden", inst || catType === "modpack"); q.classList.toggle("hidden", inst); srcBox.classList.toggle("hidden", inst); };
@@ -769,12 +779,30 @@ TABS.catalog = () => {
   setVis(); run(true);
   return root;
 };
+// установки из каталога идут в фоне на стороне лаунчера; кнопки обновляются по опросу, даже если вкладку закрывали
+const catWatch = new Map();
+let catTimer = 0;
+function watchCat(key, btn, lbl) {
+  catWatch.set(key, { btn, lbl });
+  if (!catTimer) catTimer = setInterval(async () => {
+    try {
+      const r = await api("catalog/active");
+      for (const [k, v] of Object.entries(r)) {
+        const w = catWatch.get(k); if (!w) continue;
+        catWatch.delete(k);
+        if (v === "done") { w.btn.className = "btn ok"; w.btn.disabled = true; w.btn.textContent = "✓ " + t("Установлено", "Installed"); toast(t("Установлено", "Installed")); }
+        else { w.btn.disabled = false; w.btn.textContent = w.lbl; toast(v.replace(/^error:/, "")); }
+      }
+    } catch (e) {}
+    if (!catWatch.size) { clearInterval(catTimer); catTimer = 0; }
+  }, 1000);
+}
 const fmtN = n => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "K" : String(n);
 
 function chooseWorld() {
   return new Promise(async ok => {
     let ws = [];
-    try { ws = (await api("worlds")).worlds; } catch (e) {}
+    try { ws = (await api("worlds" + (catBuild ? "?build=" + encodeURIComponent(catBuild) : ""))).worlds; } catch (e) {}
     if (!ws.length) { toast(t("В этой установке ещё нет миров", "This installation has no worlds yet")); return ok(""); }
     const sel = h("select", { style: "width:100%" }, ws.map(w => h("option", { value: w }, w)));
     modal(t("Выберите мир", "Pick a world"), h("div", null, h("p", null, t("Датапак ставится в выбранный мир.", "The datapack goes into the chosen world.")), sel),
@@ -786,19 +814,27 @@ function chooseWorld() {
 TABS.builds = () => {
   const s = S.settings, root = h("div");
   root.append(h("div", { class: "tools" },
-    h("button", { class: "btn pri", onclick: createBuild }, "+ " + t("Создать сборку", "Create build")),
-    h("button", { class: "btn", onclick: () => pickFile(".zip,.mrpack", async f => { try { await upload("pack", f); pollSoon(); toast(t("Сборка импортируется…", "Importing the pack…")); } catch (e) { toast(e.message); } }) }, t("Импорт файла (.mrpack, CurseForge, Mobilix)", "Import file (.mrpack, CurseForge, Mobilix)"))));
-  root.append(h("p", { class: "note" }, t("Сборка — отдельная установка со своими модами, настройками и мирами. Сборки Modrinth и CurseForge можно скачать и во вкладке «Каталог».", "A build is a separate installation with its own mods, settings and worlds. Modrinth and CurseForge packs are also available in the Catalog tab.")));
-  if (!(s.builds || []).length) root.append(h("div", { class: "empty" }, t("Сборок пока нет", "No builds yet")));
+    h("button", { class: "btn pri", onclick: createBuild }, "+ " + t("Добавить сборку", "Add build")),
+    h("button", { class: "btn", onclick: () => pickFile(".zip,.mrpack", async f => { try { await upload("pack", f); pollSoon(); toast(t("Сборка импортируется…", "Importing the pack…")); } catch (e) { toast(e.message); } }) }, t("Импорт (.mrpack, CurseForge, Mobilix)", "Import (.mrpack, CurseForge, Mobilix)"))));
+  if (!(s.builds || []).length) root.append(h("p", { class: "note" }, t("Сборок пока нет. У каждой сборки своя папка: моды, миры и настройки не смешиваются с обычной игрой. Карандаш открывает каталог для этой сборки; чтобы играть, выберите её внизу в списке версий на главном экране.", "No builds yet. Each build has its own folder: mods, worlds and settings stay apart from the regular game. The pencil opens the catalog for that build; to play it, pick it in the version list on the main screen.")));
   for (const b of s.builds || []) {
-    root.append(h("div", { class: "cat" }, h("div", { class: "ti" }, h("b", null, b.name), h("span", null, instTitle(b.mc, b.loader) + (s.build === b.id ? " · " + t("выбрана", "selected") : ""))),
-      h("button", { class: "btn" + (s.build === b.id ? "" : " pri"), onclick: async () => { await save({ build: s.build === b.id ? "" : b.id }); renderChrome(); renderPage(); } }, s.build === b.id ? t("Снять", "Unselect") : t("Выбрать", "Select")),
-      h("button", { class: "btn", onclick: async () => { try { await api("build/dup", { id: b.id }); await refresh(); renderPage(); } catch (e) { toast(e.message); } } }, t("Копия", "Copy")),
-      h("button", { class: "btn", onclick: () => exportBuild(b) }, t("Экспорт", "Export")),
-      h("button", { class: "btn dng", onclick: () => modal(t("Удалить сборку?", "Delete the build?"), h("p", null, b.name + " — " + t("вместе с модами и мирами этой сборки.", "with its mods and worlds.")), [{ text: t("Отмена", "Cancel") }, { text: t("Удалить", "Delete"), cls: "dng", fn: async () => { try { await api("build/delete", { id: b.id }); await refresh(); renderChrome(); renderPage(); } catch (e) { toast(e.message); } } }]) }, "✕")));
+    const on = s.build === b.id;
+    const ic = h("img", { class: "bic", src: "/api/build/icon?id=" + b.id + "&k=" + encodeURIComponent(KEY) + "&r=" + (b.iconV || 0), title: t("Сменить иконку", "Change icon"),
+      onerror: () => { const ph = h("div", { class: "bic", title: t("Сменить иконку", "Change icon"), onclick: setIcon }, "▣"); ic.replaceWith(ph); }, onclick: setIcon });
+    function setIcon() {
+      pickFile("image/png,image/jpeg", async f => { try { const r = await fetch("/api/build/icon?id=" + b.id, { method: "POST", headers: { "X-K": KEY }, body: f }); if (!r.ok) throw new Error(r.statusText); b.iconV = Date.now(); renderPage(); } catch (e) { toast(e.message); } });
+    }
+    root.append(h("div", { class: "brow" + (on ? " on" : "") }, ic,
+      h("div", { class: "bt", onclick: async () => { await save({ build: on ? "" : b.id }); renderChrome(); renderPage(); }, style: "cursor:pointer" }, h("b", null, (on ? "● " : "") + b.name), h("span", null, instTitle(b.mc, b.loader))),
+      h("button", { class: "ib", title: t("Поделиться", "Share"), onclick: () => exportBuild(b) }, pixIcon("SHARE", MENU_PAL, 2)),
+      h("button", { class: "ib", title: t("Каталог сборки", "Build catalog"), onclick: () => { catBuild = b.id; catType = "mod"; openPage("buildcat"); } }, pixIcon("PENCIL", MENU_PAL, 2)),
+      h("button", { class: "ib", title: t("Копия", "Copy"), onclick: async () => { try { await api("build/dup", { id: b.id }); await refresh(); renderPage(); } catch (e) { toast(e.message); } } }, "⧉"),
+      h("button", { class: "ib", title: t("Удалить", "Delete"), onclick: () => modal(t("Удалить сборку?", "Delete the build?"), h("p", null, "«" + b.name + "» — " + t("моды, миры и настройки сборки будут удалены.", "its mods, worlds and settings will be deleted.")), [{ text: t("Отмена", "Cancel") }, { text: t("Удалить", "Delete"), cls: "dng", fn: async () => { try { await api("build/delete", { id: b.id }); await refresh(); renderChrome(); renderPage(); } catch (e) { toast(e.message); } } }]) }, pixIcon("TRASH", TRASH_PAL, 2))));
   }
   return root;
 };
+
+PAGES.buildcat = () => [TABS.catalog()];
 
 async function exportBuild(b) {
   try {
@@ -820,6 +856,120 @@ async function createBuild() {
       catch (e) { toast(e.message); } }) }]);
 }
 
+// --- сеть: ZeroTier One ---
+let ZT = null, ztTimer = 0;
+async function ztRefresh() { try { ZT = await api("zt/status"); } catch (e) { ZT = { installed: false }; } if (page === "net") renderPage(); renderFxBtns(); }
+PAGES.net = () => {
+  if (!ZT) { ztRefresh(); return [h("div", { class: "empty" }, "…")]; }
+  clearTimeout(ztTimer); ztTimer = setTimeout(() => { if (page === "net") ztRefresh(); }, 4000);
+  const s = S.settings, out = [];
+  if (!ZT.installed) {
+    out.push(plain(row("ZeroTier One", t("Игра по сети работает поверх приложения ZeroTier One (виртуальная локальная сеть, как Radmin). Установите его, запустите и вернитесь сюда.", "Online play runs on top of ZeroTier One (a virtual LAN, like Radmin). Install it, start it and come back here."),
+      h("button", { class: "btn pri", onclick: () => api("openurl", { url: "https://www.zerotier.com/download/" }) }, t("Скачать", "Download")),
+      h("button", { class: "btn", onclick: ztRefresh }, t("Проверить", "Check")))));
+    return out;
+  }
+  out.push(plain(
+    row(ZT.running ? (ZT.online ? "● " + t("Узел ZeroTier в сети", "ZeroTier node online") : "… " + t("Узел подключается", "Node is connecting")) : "○ " + t("ZeroTier One не запущен", "ZeroTier One is not running"),
+      ZT.running ? t("ID вашего узла: ", "Your node ID: ") + ZT.address : t("Запустите ZeroTier One (служба или значок в трее).", "Start ZeroTier One (the service or the tray icon)."),
+      h("button", { class: "btn", onclick: ztRefresh }, t("Обновить", "Refresh"))),
+    row(t("Кнопка на главном экране", "Button on the main screen"), t("Быстрое включение сохранённых сетей рядом со скином.", "Quickly switch saved networks on/off next to the skin."), sw(s.ztButton, async v => { await save({ ztButton: v }); renderFxBtns(); }))));
+  const id = h("input", { type: "text", placeholder: t("ID сети (16 символов)", "Network ID (16 characters)"), maxlength: 16, spellcheck: "false", style: "width:210px" });
+  const nm = h("input", { type: "text", placeholder: t("Название", "Name"), maxlength: 24, style: "width:150px" });
+  out.push(plain(row(t("Добавить сеть", "Add a network"), t("ID создаёт хозяин сети на my.zerotier.com. После входа хозяин должен разрешить ваш узел.", "The network owner creates the ID on my.zerotier.com. After joining, the owner must authorise your node."),
+    id, nm, h("button", { class: "btn pri", onclick: async () => { try { await api("zt/join", { id: id.value.trim(), name: nm.value.trim() }); await refresh(); ztRefresh(); toast(t("Готово", "Done")); } catch (e) { toast(e.message); } } }, t("Войти", "Join")))));
+  const joined = new Map((ZT.nets || []).map(n => [n.id, n]));
+  const list = h("div", { style: "margin-top:10px" });
+  for (const n of s.ztNets || []) {
+    const j = joined.get(n.id), ip = j && j.ips && j.ips[0];
+    list.append(h("div", { class: "netnode" }, h("div", { class: "st" + (j && j.status === "OK" ? " ok" : "") }),
+      h("div", { class: "ti" }, h("b", null, n.name || n.id), h("span", null, n.id + " · " + (j ? (j.status === "OK" ? (ip || "") : j.status === "ACCESS_DENIED" ? t("хозяин ещё не разрешил вход", "owner has not authorised you yet") : j.status) : t("не подключён", "not joined")))),
+      ip ? h("button", { class: "btn", onclick: () => navigator.clipboard.writeText(ip).then(() => toast(t("IP скопирован", "IP copied"))) }, t("Копировать IP", "Copy IP")) : null,
+      j ? h("button", { class: "btn", onclick: async () => { await api("zt/leave", { id: n.id }); ztRefresh(); } }, t("Выйти", "Leave")) : h("button", { class: "btn pri", onclick: async () => { try { await api("zt/join", { id: n.id, name: n.name }); ztRefresh(); } catch (e) { toast(e.message); } } }, t("Войти", "Join")),
+      h("button", { class: "ib", title: t("Забыть", "Forget"), onclick: async () => { await api("zt/leave", { id: n.id, forget: true }); await refresh(); ztRefresh(); } }, "✕")));
+  }
+  out.push(list);
+  out.push(plain(row(t("Раздать мир друзьям", "Share my world"), t("В игре откройте мир для сети (Esc → Открыть для сети), затем скопируйте адрес и отправьте друзьям. Порт определяется по журналу игры.", "In the game choose Open to LAN, then copy the address and send it to friends. The port is read from the game log."),
+    h("button", { class: "btn pri", onclick: async () => { try { const r = await api("zt/share"); await navigator.clipboard.writeText(r.text); toast(r.text + " — " + t("скопировано", "copied")); } catch (e) { toast(e.message); } } }, t("Копировать адрес", "Copy address")))));
+  return out;
+};
+
+// --- праздничные эффекты (как в мобайл-версии): тыквы и летучие мыши, снег, криперы, курицы ---
+function season() {
+  const q = new URLSearchParams(location.search).get("fx") || (() => { try { return sessionStorage.getItem("fxForce"); } catch (e) { return null; } })();
+  if (q) return q;
+  const d = new Date(), m = d.getMonth(), day = d.getDate();
+  if ((m === 9 && day >= 24) || (m === 10 && day <= 7)) return "halloween";
+  if ((m === 11 && day >= 25) || (m === 0 && day <= 8)) return "newyear";
+  if (m === 4 && day >= 10 && day <= 24) return "mcbday";
+  if ((m === 2 && day >= 25) || (m === 3 && day <= 8)) return "aprilfools";
+  return null;
+}
+const SPR = {};
+function sprite(kind, name) {
+  const k = kind + name;
+  if (!SPR[k]) { const pal = FX_PAL[kind][name]; pal.__fx = 1; SPR[k] = pixIcon(name, pal, 1); }
+  return SPR[k];
+}
+const FX = { ps: [], kind: null, raf: 0, last: 0 };
+function fxSpawn(kind, w, h, top) {
+  const r = Math.random, x = r() * w, y = top ? -24 : r() * h, ph = r() * 6;
+  const mk = (name, size, vx, vy, bat) => ({ x, y, vx, vy, ph, size, bat: !!bat, c: sprite(kind, name) });
+  if (kind === "newyear") return mk("SNOW", r() < .25 ? 14 : 8 + r() * 3, (r() - .5) * 14, 22 + r() * 28);
+  if (kind === "mcbday") return mk("CREEPER", 13 + r() * 7, (r() - .5) * 8, 70 + r() * 60);
+  if (kind === "aprilfools") return mk("CHICKEN", 18 + r() * 6, (r() - .5) * 20, 14 + r() * 14);
+  if (r() < .33) { const p = mk("BAT", 20, (r() < .5 ? 1 : -1) * (30 + r() * 30), 0, true); p.y = r() * h * .7; return p; }
+  return mk("PUMPKIN", 16 + r() * 8, (r() - .5) * 10, 16 + r() * 20);
+}
+function fxLoop(now) {
+  const cv = $("#fx"), kind = FX.kind;
+  if (!kind || !S.settings.fxOn) { cv.getContext("2d").clearRect(0, 0, cv.width, cv.height); FX.raf = 0; return; }
+  const w = innerWidth, hh = innerHeight;
+  if (cv.width !== w || cv.height !== hh || !FX.ps.length) {
+    cv.width = w; cv.height = hh;
+    const per = kind === "newyear" ? 9000 : kind === "mcbday" ? 14000 : 20000;
+    FX.ps = Array.from({ length: Math.max(6, Math.min(36, Math.round(w * hh / per / 3))) }, () => fxSpawn(kind, w, hh, false));
+  }
+  const dt = FX.last && now - FX.last < 200 ? (now - FX.last) / 1000 : .016; FX.last = now;
+  const x = cv.getContext("2d"); x.clearRect(0, 0, w, hh); x.imageSmoothingEnabled = false;
+  x.globalAlpha = kind === "newyear" ? .82 : .92;
+  FX.ps.forEach((p, i) => {
+    p.ph += dt * (p.bat ? 5 : 1.5);
+    p.x += p.vx * dt + (p.bat ? 0 : Math.sin(p.ph) * 8 * dt);
+    p.y += p.vy * dt + (p.bat ? Math.sin(p.ph) * 30 * dt : 0);
+    if (p.bat) { if (p.x < -30) p.x = w + 20; else if (p.x > w + 30) p.x = -20; }
+    else if (p.y > hh + 24) FX.ps[i] = fxSpawn(kind, w, hh, true);
+    x.drawImage(p.c, p.x, p.y, p.size, p.size * p.c.height / p.c.width);
+  });
+  FX.raf = requestAnimationFrame(fxLoop);
+}
+function fxStart() {
+  FX.kind = season();
+  if (FX.kind && S.settings.fxOn && !FX.raf) { FX.ps = []; FX.raf = requestAnimationFrame(fxLoop); }
+}
+// кнопки у скина: эффекты (только в праздничную неделю) и ZeroTier (если включена в настройках сети)
+function renderFxBtns() {
+  if (!S) return;
+  const s = S.settings, fb = $("#fxBtn"), zb = $("#ztBtn"), sn = season();
+  fb.classList.toggle("hidden", !sn);
+  if (sn) {
+    fb.classList.toggle("off", !s.fxOn); fb.innerHTML = "";
+    const nm = { halloween: "PUMPKIN", newyear: "SNOW", mcbday: "CREEPER", aprilfools: "CHICKEN" }[sn];
+    const pal = FX_PAL[sn][nm]; pal.__fx = 1; fb.append(pixIcon(nm, pal, 3));
+    fb.onclick = async () => { await save({ fxOn: !s.fxOn }); renderFxBtns(); fxStart(); };
+  }
+  zb.classList.toggle("hidden", !s.ztButton);
+  if (s.ztButton) {
+    zb.classList.toggle("off", !s.ztOn); zb.classList.toggle("ztok", !!s.ztOn); zb.innerHTML = ""; zb.append(pixIcon("NET", MENU_PAL, 2));
+    zb.title = s.ztOn ? t("ZeroTier включён — нажмите, чтобы выключить", "ZeroTier is on — click to turn off") : t("Включить ZeroTier", "Turn ZeroTier on");
+    zb.onclick = async () => {
+      if (!s.ztNets || !s.ztNets.length) { toast(t("Сначала добавьте сеть на странице «Сеть»", "Add a network on the Network page first")); openPage("net"); return; }
+      try { await api("zt/toggle", { on: !s.ztOn }); await refresh(); renderFxBtns(); toast(S.settings.ztOn ? t("ZeroTier включён", "ZeroTier on") : t("ZeroTier выключен", "ZeroTier off")); }
+      catch (e) { toast(e.message); }
+    };
+  }
+}
+
 // --- соцсети ---
 PAGES.social = () => {
   const link = (name, sub, url) => row(name, sub, h("button", { class: "btn pri", onclick: () => api("openurl", { url }).catch(e => toast(e.message)) }, t("Открыть", "Open")));
@@ -830,7 +980,7 @@ PAGES.social = () => {
       link("GitHub · Android", "Kumolix/Mobilix-Launcher-for-Minecraft", "https://github.com/Kumolix/Mobilix-Launcher-for-Minecraft"),
       link("Telegram", "@MOBILIX_LAUNCHER", "https://t.me/mobilix_launcher"),
       link("TikTok", "@mobilix_launcher", "https://www.tiktok.com/@mobilix_launcher")),
-    h("p", { class: "note" }, t("Основано на Mobilix Launcher for Minecraft, автор Kumolix.", "Based on Mobilix Launcher for Minecraft by Kumolix.")),
+    h("p", { class: "note" }, t("Разработчик: Kumolix. Основано на Mobilix Launcher for Minecraft.", "Developer: Kumolix. Based on Mobilix Launcher for Minecraft.")),
   ];
 };
 
@@ -843,6 +993,7 @@ async function init() {
   Skin3D.mount($("#skinView"));
   buildMenus(); renderChrome(); initHover(); loadSkin();
   requestAnimationFrame(() => Skin3D.fit());
+  fxStart();
   new ResizeObserver(() => Skin3D.fit()).observe($("#skinCard"));
   STATUS = S.status || STATUS; renderStatus();
   $("#btnExit").onclick = () => { api("exit", {}).finally(() => { try { window.close(); } catch (e) {} }); };

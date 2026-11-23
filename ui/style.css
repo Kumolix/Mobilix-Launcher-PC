@@ -45,9 +45,9 @@ canvas.pix { image-rendering:pixelated; display:block; }
 
 /* центр: скин / лог */
 #stage { flex:1; min-height:0; padding:2px 16px 6px; display:flex; gap:16px; container-type:size; }
-#skinCol { height:100%; width:calc(100cqh - 30px); display:flex; flex-direction:column; gap:6px; flex:none; }
-#loginTag { flex:none; align-self:flex-start; font-size:12px; font-weight:600; padding:3px 12px; border-radius:10px; color:var(--accent); background:color-mix(in srgb,var(--act) 20%,transparent); border:1px solid color-mix(in srgb,var(--act) 45%,transparent); }
-#right { flex:1; min-width:0; display:flex; align-items:flex-end; justify-content:flex-end; }
+#skinCol { height:100%; width:100cqh; display:flex; flex-direction:column; gap:6px; flex:none; }
+#loginTag { position:absolute; top:10px; left:50%; transform:translateX(-50%); z-index:4; font-size:13px; font-weight:600; padding:4px 14px; border-radius:11px; color:var(--accent); background:color-mix(in srgb,var(--drawer) 80%,transparent); border:1px solid color-mix(in srgb,var(--act) 55%,transparent); white-space:nowrap; }
+#right { flex:1; min-width:0; display:flex; align-items:flex-end; justify-content:center; }
 #skinLoad { position:absolute; inset:0; display:none; align-items:center; justify-content:center; color:var(--dim); font-size:16px; z-index:3; background:color-mix(in srgb,var(--skinBg) 92%,transparent); }
 #skinCard.loading #skinLoad { display:flex; }
 #skinCard.loading #skinView, #skinCard.loading #ground { visibility:hidden; }
@@ -74,7 +74,7 @@ canvas.pix { image-rendering:pixelated; display:block; }
 /* низ: нижнее меню слева; версия и «Играть» справа внизу */
 #bottom { flex:none; height:92px; padding:0 12px 14px; display:flex; align-items:flex-end; justify-content:center; position:relative; z-index:30; }
 body.side #bottom { height:10px; padding:0; }
-#playGroup { width:min(560px,100%); display:flex; flex-direction:column; gap:7px; }
+#playGroup { width:min(640px,100%); display:flex; flex-direction:column; gap:7px; }
 #statusRow { display:flex; justify-content:space-between; gap:10px; font-size:12px; color:var(--dim); min-height:15px; padding:0 4px; }
 #stText { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 #statusRow .err { color:#ff7d80; }
@@ -82,13 +82,13 @@ body.side #bottom { height:10px; padding:0; }
 #progress i { position:absolute; left:0; top:0; bottom:0; width:0; border-radius:3px; background:linear-gradient(90deg,var(--act),var(--accent)); transition:width .25s; }
 #progress.ind i { width:30%; animation:ind 1.1s ease-in-out infinite; }
 @keyframes ind { from { left:-30%; } to { left:100%; } }
-#actRow { display:flex; gap:10px; align-items:stretch; height:56px; }
+#actRow { display:flex; gap:12px; align-items:stretch; height:76px; }
 .vrow { flex:1; display:flex; gap:8px; position:relative; min-width:0; }
-.vbtn { flex:1; min-width:0; border-radius:18px; background:var(--chip); color:var(--text); font-size:17px; padding:0 16px; text-align:left;
+.vbtn { flex:1; min-width:0; border-radius:18px; background:var(--chip); color:var(--text); font-size:20px; padding:0 20px; text-align:left;
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; border:1px solid transparent; }
 .vbtn:hover, .varrow:hover { border-color:color-mix(in srgb,var(--accent) 45%,transparent); }
-.varrow { width:56px; border-radius:18px; background:var(--chip2); color:var(--accent); font-size:16px; border:1px solid transparent; }
-#playBtn { width:170px; border-radius:18px; font-size:22px; font-weight:700; letter-spacing:.08em; color:#fff;
+.varrow { width:64px; border-radius:18px; background:var(--chip2); color:var(--accent); font-size:16px; border:1px solid transparent; }
+#playBtn { width:230px; border-radius:20px; font-size:28px; font-weight:700; letter-spacing:.08em; color:#fff;
   background:linear-gradient(90deg,var(--act),var(--hi)); animation:pulse 1.4s ease-in-out infinite alternate; transition:filter .15s; }
 #playBtn:hover { filter:brightness(1.12); }
 #playBtn:active { transform:scale(.97); }
@@ -225,3 +225,20 @@ h3.sec { margin:18px 0 6px; font-size:14px; color:var(--dim); font-weight:600; t
 .bchip { font-size:12px; color:var(--dim); }
 .cat .btn.ok { background:var(--chip); color:var(--accent); }
 @media (max-width:900px) { #playGroup { width:100%; } #playBtn { width:160px; } }
+
+.cbtn { position:absolute; bottom:10px; width:42px; height:42px; border-radius:11px; background:var(--drawer); border:2px solid var(--accent); z-index:4; display:flex; align-items:center; justify-content:center; padding:0; }
+#fxBtn { right:10px; } #ztBtn { left:10px; }
+.cbtn.off { opacity:.45; } .cbtn.ztok { border-color:#5BD67B; box-shadow:0 0 10px color-mix(in srgb,var(--accent) 60%,transparent); }
+#fx { position:fixed; inset:0; width:100%; height:100%; pointer-events:none; z-index:0; }
+.tabs.top { gap:0; margin:-2px -22px 14px; border-bottom:1px solid var(--line); background:var(--bar); }
+.tabs.top button { flex:1; background:none; border-radius:0; padding:14px 4px 11px; font-size:16px; color:var(--dim); border-bottom:3px solid transparent; }
+.tabs.top button.on { color:var(--accent); font-weight:700; border-bottom-color:var(--act); background:none; }
+.brow { display:flex; align-items:center; gap:10px; padding:8px 8px 8px 10px; border-radius:14px; background:var(--chip); margin-bottom:8px; }
+.brow.on { background:var(--accentDk); }
+.brow .bic { width:52px; height:52px; border-radius:10px; object-fit:cover; background:var(--chip2); flex:none; display:flex; align-items:center; justify-content:center; color:var(--dim); font-size:20px; cursor:pointer; }
+.brow .bt { flex:1; min-width:0; } .brow .bt b { display:block; font-size:17px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; } .brow .bt span { font-size:12px; color:var(--dim); }
+.ib { width:44px; height:44px; border-radius:10px; background:none; display:flex; align-items:center; justify-content:center; color:var(--text2); font-size:18px; padding:0; }
+.ib:hover { background:color-mix(in srgb,#fff 14%,transparent); }
+.netnode { display:flex; gap:10px; align-items:center; padding:10px 12px; border-radius:12px; background:var(--chip2); margin-bottom:8px; }
+.netnode .st { width:10px; height:10px; border-radius:50%; background:var(--dim); flex:none; } .netnode .st.ok { background:#5BD67B; }
+.netnode .ti { flex:1; min-width:0; } .netnode .ti span { display:block; font-size:12px; color:var(--dim); }
