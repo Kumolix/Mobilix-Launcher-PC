@@ -766,7 +766,7 @@ TABS.catalog = () => {
   const types = [["mod", t("Моды", "Mods")], ["modpack", t("Сборки", "Modpacks")], ["resourcepack", t("Ресурспаки", "Resource packs")], ["shader", t("Шейдеры", "Shaders")], ["datapack", t("Датапаки", "Datapacks")], ["installed", t("Установлено", "Installed")]];
   const srcs = [["modrinth", "Modrinth"], ["curseforge", "CurseForge"]];
   const q = h("input", { type: "search", placeholder: t("Поиск…", "Search…"), value: catQ, onkeydown: e => { if (e.key === "Enter") { catQ = q.value; run(true); } } });
-  const e0 = (catBuild || s.build) ? (s.builds || []).find(b => b.id === (catBuild || s.build)) : null;
+  const e0 = catBuild ? (s.builds || []).find(b => b.id === catBuild) : null;
   const target = e0 ? e0.name : (s.selected ? instTitle(s.selected, s.loader) : t("выбранной версии", "the selected version"));
   const openFilters = () => {
     let strict = catFilter, hide = catHide, auto = !s.modDlManual;
@@ -826,7 +826,7 @@ TABS.catalog = () => {
   async function runInstalled() {
     res.innerHTML = "";
     res.append(plain(row(t("Сохранить как сборку", "Save as a build"), t("Всё скачанное (моды, ресурспаки, шейдеры, настройки) копируется в новую сборку под ту же версию.", "Everything downloaded (mods, resource packs, shaders, configs) is copied into a new build for the same version."),
-      h("button", { class: "btn pri", disabled: !(catBuild || hasSel()), onclick: () => {
+      h("button", { class: "btn pri", disabled: !(catBuild || s.selected), onclick: () => {
         const nm = h("input", { type: "text", placeholder: t("Название сборки", "Build name"), maxlength: 40, style: "width:100%" });
         modal(t("Сохранить как сборку", "Save as a build"), h("div", null, h("p", null, t("Как назвать новую сборку?", "Name the new build:")), nm), [{ text: t("Отмена", "Cancel") }, { text: t("Сохранить", "Save"), cls: "pri", fn: async () => {
           try { await api("build/fromcurrent", { name: nm.value.trim(), build: catBuild }); await refresh(); renderChrome(); toast(t("Сборка сохранена — она во вкладке «Сборки»", "Build saved — see the Builds tab")); } catch (e) { toast(e.message); } } }]);

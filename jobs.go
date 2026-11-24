@@ -14,10 +14,10 @@ import (
 type Eff struct{ MC, Loader, LoaderVer, Key string }
 
 // effFor: установка для заданной сборки (id) или выбранная сейчас, если id пустой.
+// effFor — установка для каталога: сборка только если указана явно, иначе обычная выбранная версия
+// (даже когда в лаунчере выбрана сборка).
 func (s Settings) effFor(build string) Eff {
-	if build != "" {
-		s.Build = build
-	}
+	s.Build = build
 	return s.eff()
 }
 

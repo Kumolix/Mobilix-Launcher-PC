@@ -96,8 +96,30 @@ func main() {
 		_ = run("reg", "add", regKey, "/v", kv[0], "/t", "REG_SZ", "/d", kv[1], "/f")
 	}
 	_ = run("reg", "add", regKey, "/v", "NoModify", "/t", "REG_DWORD", "/d", "1", "/f")
+	installZeroTier()
 	if box("Готово! Запустить "+appName+" сейчас?", mbYesNo|mbIconInfo) == idYes {
 		_ = exec.Command("explorer.exe", exe).Start() // от имени обычного пользователя
+	}
+}
+
+// installZeroTier ставит ZeroTier One (виртуальная сеть для игры с друзьями), если его ещё нет.
+// Установщик уже работает с правами администратора, поэтому MSI ставится тихо.
+func installZeroTier() {
+	pd := os.Getenv("ProgramData")
+	if pd == "" {
+		pd = `C:\ProgramData`
+	}
+	if _, err := os.Stat(filepath.Join(pd, "ZeroTier", "One")); err == nil {
+		return
+	}
+	if box("Установить ZeroTier One?\n\nОн нужен для игры по сети с друзьями без настройки роутера (создаёт виртуальную сеть). Файл (~10 МБ) скачивается с официального сайта zerotier.com.", mbYesNo|mbIconQ) != idYes {
+		return
+	}
+	err := ps(`$ErrorActionPreference='Stop';[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;` +
+		`$f=Join-Path $env:TEMP 'ZeroTierOne.msi';Invoke-WebRequest -UseBasicParsing 'https://download.zerotier.com/dist/ZeroTier%20One.msi' -OutFile $f;` +
+		`$p=Start-Process msiexec -ArgumentList '/i',$f,'/qn','/norestart' -Wait -PassThru;Remove-Item $f -ErrorAction SilentlyContinue;exit $p.ExitCode`)
+	if err != nil {
+		box("ZeroTier One не установился. Его можно поставить позже кнопкой «Установить» на странице «Игра по сети» в лаунчере.", mbIconErr)
 	}
 }
 

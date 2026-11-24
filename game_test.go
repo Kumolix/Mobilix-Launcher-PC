@@ -76,3 +76,11 @@ func TestSkinUUIDWidth(t *testing.T) {
 		t.Fatal("packFormat")
 	}
 }
+
+func TestPackFormatTable(t *testing.T) {
+	for mc, want := range map[string]int{"1.8.9": 1, "1.12.2": 3, "1.16.5": 6, "1.19.2": 9, "1.19.4": 13, "1.20.1": 15, "1.20.4": 22, "1.21": 34, "1.21.1": 34, "1.21.4": 46, "1.21.11": 75} {
+		if got := packFormat(mc); got != want {
+			t.Errorf("%s: %d != %d", mc, got, want)
+		}
+	}
+}
