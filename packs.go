@@ -587,3 +587,47 @@ func (a *App) hBuildIcon(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	_, _ = w.Write(b)
 }
+
+// hBuildFromCurrent: «Сохранить как сборку» — всё скачанное в выбранной установке копируется в новую сборку под ту же версию.
+func (a *App) hBuildFromCurrent(w http.ResponseWriter, r *http.Request) {
+	var b struct{ Name, Build string }
+	if readBody(r, &b) != nil {
+		jerr(w, 400, "bad request")
+		return
+	}
+	s := a.settings()
+	e := s.effFor(b.Build)
+	if e.MC == "" {
+		jerr(w, 400, a.tr("Сначала выберите версию игры", "Pick a game version first"))
+		return
+	}
+	name := strings.TrimSpace(b.Name)
+	if name == "" {
+		name = instName(e) + " " + a.tr("(сохранено)", "(saved)")
+	}
+	src := a.gameDirE(e)
+	nb := a.addBuild(name, e.MC, e.Loader, e.LoaderVer)
+	dst := a.buildDir(nb.ID)
+	for _, d := range []string{"mods", "resourcepacks", "shaderpacks", "config", "datapacks"} {
+		if _, err := os.Stat(filepath.Join(src, d)); err == nil {
+			if err := copyTree(filepath.Join(src, d), filepath.Join(dst, d)); err != nil {
+				jerr(w, 500, err.Error())
+				return
+			}
+		}
+	}
+	for _, f := range []string{"mobilix-index.json", "options.txt", "servers.dat"} {
+		if data, err := os.ReadFile(filepath.Join(src, f)); err == nil {
+			_ = os.WriteFile(filepath.Join(dst, f), data, 0o644)
+		}
+	}
+	a.lg.add("[Mobilix] " + a.tr("Сборка сохранена: ", "Build saved: ") + name)
+	jw(w, map[string]any{"build": nb})
+}
+
+func instName(e Eff) string {
+	if e.Loader == "" || e.Loader == "vanilla" {
+		return e.MC
+	}
+	return e.MC + " " + e.Loader
+}

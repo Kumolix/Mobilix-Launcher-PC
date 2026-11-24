@@ -63,6 +63,7 @@ function themeFrom(c) {
 function curCustom() { const s = S.settings; return s.cSel >= 0 && s.cThemes && s.cThemes[s.cSel] ? s.cThemes[s.cSel] : null; }
 
 function applyTheme() {
+  menuSig = "";
   const s = S.settings, cu = curCustom();
   const p = cu ? themeFrom(cu.colors) : PAL[(s.style === "old" ? "old" : "new") + "-" + (s.light ? "light" : "dark")];
   const r = document.documentElement.style;
@@ -108,8 +109,15 @@ function setDrawer(o) {
   $("#scrim").classList.toggle("on", o);
 }
 
+let menuSig = "";
 function buildMenus() {
   const side = S.settings.menuType === "side";
+  const sig = [side, S.settings.lang, S.settings.cSel, S.settings.style, S.settings.light].join("|");
+  if (sig === menuSig && $("#dockSlot").firstChild || sig === menuSig && side) {
+    document.querySelectorAll("#dockSlot .cell").forEach((c, i) => c.classList.toggle("cur", page === MENU[i].id));
+    return;
+  }
+  menuSig = sig;
   document.body.classList.toggle("side", side);
   const dr = $("#drawer"); dr.innerHTML = "";
   dr.append(h("div", { class: "dt" }, h("div", { class: "logo" }, "Mobilix")));
@@ -142,6 +150,7 @@ function initHover() {
 // ---------- шапка, версия, кнопка «Играть» ----------
 const LOADERS = [["vanilla", "Vanilla"], ["fabric", "Fabric"], ["quilt", "Quilt"], ["forge", "Forge"], ["neoforge", "NeoForge"]];
 const loaderName = l => (LOADERS.find(x => x[0] === l) || LOADERS[0])[1];
+const vkey = (mc, l) => "ver:" + mc + "|" + (l || "vanilla");
 const instTitle = (mc, l) => mc + (l && l !== "vanilla" ? " • " + loaderName(l) : "");
 
 function verTitle() {
@@ -178,27 +187,31 @@ function renderChrome() {
 
 function renderStatus() {
   const st = STATUS, pb = $("#playBtn"), pr = $("#progress");
-  pb.classList.toggle("cancel", st.busy);
+  const playing = st.busy && st.kind === "play";
+  pb.classList.toggle("cancel", playing);
   pb.disabled = !!st.running && !st.busy;
-  pb.textContent = st.busy ? t("Отмена", "Cancel") : st.running ? t("Игра идёт", "Running") : t("Играть", "Play");
+  pb.textContent = playing ? t("Отмена", "Cancel") : st.running ? t("Игра идёт", "Running") : t("Играть", "Play");
+  const qn = (st.queue || []).length;
+  $("#stCancel").classList.toggle("hidden", !st.busy || playing);
+  $("#stCancel").title = t("Отменить загрузки", "Cancel downloads");
   pr.classList.toggle("ind", st.busy && st.percent < 0);
   pr.firstElementChild.style.width = st.busy && st.percent >= 0 ? st.percent + "%" : (st.busy ? "" : "0");
   const txt = $("#stText");
   txt.classList.toggle("err", !!st.error && !st.busy);
-  txt.textContent = st.busy ? (st.stage || "…") : (st.error ? st.error : (st.running ? t("Игра запущена", "Game is running") : ""));
+  txt.textContent = st.busy ? (st.stage || "…") + (qn ? " · " + t("в очереди: ", "queued: ") + qn : "") : (st.error ? st.error : (st.running ? t("Игра запущена", "Game is running") : ""));
   txt.title = txt.textContent;
   $("#stPct").textContent = st.busy && st.percent >= 0 ? st.percent + "%" : "";
   $("#tabStop").classList.toggle("hidden", !st.running);
 }
 
 async function onPlay() {
-  if (STATUS.busy) { api("cancel", {}); return; }
+  if (STATUS.busy && STATUS.kind === "play") { api("cancel", {}); return; }
   if (!hasSel()) { openPage("downloads"); toast(t("Сначала выберите версию игры", "Pick a game version first")); return; }
-  try { await api("play", {}); STATUS = { ...STATUS, busy: true, error: "", percent: -1, stage: "…" }; renderStatus(); pollSoon(); }
+  try { await api("play", {}); if (!STATUS.busy) STATUS = { ...STATUS, busy: true, kind: "play", error: "", percent: -1, stage: "…" }; renderStatus(); pollSoon(); }
   catch (e) { toast(e.message); }
 }
 
-let pollT = 0, wasBusy = false;
+let pollT = 0, wasBusy = false, lastQ = "";
 function pollSoon() { clearTimeout(pollT); pollT = setTimeout(poll, 200); }
 async function poll() {
   try {
@@ -210,6 +223,8 @@ async function poll() {
       if (!STATUS.error && hasSel()) toast(t("Готово", "Done"));
       if (page === "downloads") renderPage();
     }
+    const qs = (STATUS.cur || "") + "|" + (STATUS.queue || []).join(",");
+    if (qs !== lastQ) { lastQ = qs; if (page === "downloads" && dlTab === "versions") renderPage(); }
     wasBusy = STATUS.busy;
     renderStatus();
   } catch (e) {}
@@ -339,21 +354,30 @@ async function loadSkin() {
 const TITLES = { net: ["Игра по сети", "Online over LAN"], buildcat: ["Каталог сборки", "Build catalog"], account: ["Аккаунт", "Account"], settings: ["Настройки", "Settings"], downloads: ["Загрузки", "Downloads"], social: ["Соцсети", "Social"] };
 
 function openPage(id) { page = id; buildMenus(); renderPage(); }
-function closePage() { page = null; catBuild = ""; $("#pageLayer").classList.add("hidden"); $("#pageLayer").innerHTML = ""; buildMenus(); }
+function closePage() { page = null; shownPage = null; catBuild = ""; $("#pageLayer").classList.add("hidden"); $("#pageLayer").innerHTML = ""; buildMenus(); }
 
-function renderPage() {
+let shownPage = null;
+// fade: плавная смена содержимого (переключение вкладок); без fade страница обновляется на месте, без мигания
+function renderPage(fade) {
   if (!page) return;
-  const L = $("#pageLayer");
+  const L = $("#pageLayer"), cur = L.querySelector(".page");
+  const wasHidden = L.classList.contains("hidden");
   L.classList.remove("hidden");
-  const old = L.querySelector(".pbody"), scroll = old ? old.scrollTop : 0;
+  if (cur && shownPage === page) {
+    const body = cur.querySelector(".pbody"), scroll = fade ? 0 : body.scrollTop;
+    const pin = h("div", { class: "pin" + (fade ? " fade" : "") }, PAGES[page]());
+    body.replaceChild(pin, body.firstChild);
+    body.scrollTop = scroll;
+    return;
+  }
   const body = h("div", { class: "pbody" }, h("div", { class: "pin" }, PAGES[page]()));
-  L.innerHTML = "";
-  L.append(h("div", { class: "page" },
+  const pg = h("div", { class: "page" + (wasHidden || !cur ? "" : " still") },
     h("div", { class: "phead" },
       h("button", { class: "back", onclick: closePage, title: t("Назад", "Back") }, svg("M15 5 8 12l7 7")),
       h("h2", null, t(...TITLES[page]))),
-    body));
-  body.scrollTop = scroll;
+    body);
+  L.innerHTML = ""; L.append(pg);
+  shownPage = page;
 }
 
 function svg(d) {
@@ -466,7 +490,7 @@ let setTab = "launcher";
 PAGES.settings = () => {
   const s = S.settings;
   const T = [["launcher", t("Лаунчер", "Launcher")], ["game", t("Игра", "Game")], ["memory", t("Память и Java", "Memory & Java")], ["gfx", t("Графика", "Graphics")], ["net", t("Загрузка", "Network")], ["upd", t("Обновления", "Updates")], ["special", t("Специальное", "Special")]];
-  const out = [tabs(T, setTab, v => { setTab = v; renderPage(); })];
+  const out = [tabs(T, setTab, v => { setTab = v; renderPage(true); })];
   const maxMb = Math.max(2048, Math.min(32768, (S.ramMb || 16384) - 1024));
   const sel = (opts, val, fn, w) => { const e = h("select", { style: w ? "width:" + w : "", onchange: () => fn(e.value) }, opts.map(([v, l]) => h("option", { value: v, selected: String(v) === String(val) }, l))); return e; };
   if (setTab === "launcher") {
@@ -637,17 +661,30 @@ function themeEditor(idx) {
 let dlTab = "versions";
 PAGES.downloads = () => {
   const T = [["versions", t("Версии", "Versions")], ["catalog", t("Каталог", "Catalog")], ["builds", t("Сборки", "Builds")]];
-  const tb = tabs(T, dlTab, v => { dlTab = v; renderPage(); }); tb.classList.add("top");
+  const tb = tabs(T, dlTab, v => { dlTab = v; renderPage(true); }); tb.classList.add("top");
   return [tb, TABS[dlTab]()];
 };
 const TABS = {};
 
-let VERS = null, verFilter = "release", verQuery = "";
+let VERS = null, verFilter = "release", verQuery = "", verList = [];
+const rowLoader = {};
+const verState = key => (STATUS.cur === key ? "cur" : (STATUS.queue || []).includes(key) ? "queued" : "");
 TABS.versions = () => {
   const s = S.settings, root = h("div"), listBox = h("div", { class: "list" });
   const q = h("input", { type: "search", placeholder: t("Поиск версии…", "Search version…"), value: verQuery, oninput: () => { verQuery = q.value; fill(); } });
   const types = [["release", t("Релизы", "Releases")], ["snapshot", t("Снапшоты", "Snapshots")], ["old", t("Старые", "Old")]];
-  let instSet = new Set();
+  const has = (mc, l) => verList.some(x => x.mc === mc && x.loader === l);
+  const queue = async (mc, loader, loaderVer) => {
+    try { await api("install2", { mc, loader, loaderVer: loaderVer || "" }); rowLoader[mc] = loader; STATUS = { ...STATUS, queue: [...(STATUS.queue || []), vkey(mc, loader)] }; lastQ = ""; pollSoon(); fill(); }
+    catch (e) { toast(e.message); }
+  };
+  const remove = (mc, l) => {
+    const ids = verList.filter(x => x.mc === mc && x.loader === l).map(x => x.id);
+    if (l === "vanilla" && verList.some(x => x.mc === mc && x.loader !== "vanilla")) { toast(t("Сначала удалите загрузчики этой версии", "Remove this version's loaders first")); return; }
+    modal(t("Удалить версию?", "Delete the version?"), h("p", null, instTitle(mc, l) + " — " + t("файлы версии будут удалены; миры и моды останутся.", "version files will be deleted; worlds and mods stay.")),
+      [{ text: t("Отмена", "Cancel") }, { text: t("Удалить", "Delete"), cls: "dng", fn: async () => {
+        try { await api("version/delete", { ids }); const r = await api("installed"); verList = r.list; if (!s.build && S.settings.selected === mc && (S.settings.loader || "vanilla") === l) await save({ selected: "", loader: "vanilla", loaderVer: "" }); renderChrome(); fill(); } catch (e) { toast(e.message); } } }]);
+  };
   const fill = () => {
     listBox.innerHTML = "";
     if (!VERS) return;
@@ -655,16 +692,28 @@ TABS.versions = () => {
     if (verQuery) arr = arr.filter(v => v.id.toLowerCase().includes(verQuery.toLowerCase()));
     if (!arr.length) listBox.append(h("div", { class: "empty" }, t("Ничего не найдено", "Nothing found")));
     for (const v of arr.slice(0, 250)) {
-      const cur = !S.settings.build && v.id === S.settings.selected;
-      const loaders = [...instSet].filter(k => k.startsWith(v.id + "|")).map(k => loaderName(k.split("|")[1]));
-      listBox.append(h("div", { class: "item" + (cur ? " sel" : ""), onclick: () => installModal(v.id) },
-        h("span", { class: "nm" }, v.id), ...loaders.map(l => h("span", { class: "tag" }, l)), h("span", { class: "meta" }, v.date)));
+      const mc = v.id, got = LOADERS.map(x => x[0]).filter(l => has(mc, l));
+      const sel0 = !S.settings.build && S.settings.selected === mc ? (S.settings.loader || "vanilla") : null;
+      const L = rowLoader[mc] || sel0 || got[0] || "vanilla";
+      const st = verState(vkey(mc, L)), have = has(mc, L);
+      const chips = h("div", { class: "lchips" });
+      for (const l of LOADERS.map(x => x[0])) {
+        const pend = verState(vkey(mc, l));
+        if (!has(mc, l) && !pend && !(l === L && !have && l !== "vanilla")) continue;
+        chips.append(h("button", { class: "tag chip" + (l === L ? " on" : "") + (pend ? " pend" : ""), onclick: () => { rowLoader[mc] = l; fill(); } }, loaderName(l)));
+      }
+      chips.append(h("button", { class: "tag chip add", title: t("Другой загрузчик", "Another loader"), onclick: () => installModal(mc, null, (ld, lv) => queue(mc, ld, lv)) }, "+"));
+      const cur = sel0 === L;
+      let acts;
+      if (st) acts = [h("button", { class: "btn", disabled: true }, st === "cur" ? t("Установка", "Installing") + (STATUS.percent >= 0 ? " " + STATUS.percent + "%" : "…") : t("В очереди", "Queued"))];
+      else if (have) acts = [h("button", { class: "btn dng", onclick: () => remove(mc, L) }, t("Удалить", "Delete")),
+        h("button", { class: "btn " + (cur ? "ok" : "pri"), disabled: cur, onclick: async () => { await save({ selected: mc, loader: L, loaderVer: "", build: "" }); renderChrome(); fill(); } }, cur ? "✓ " + t("Выбрано", "Selected") : t("Выбрать", "Select"))];
+      else acts = [h("button", { class: "btn pri", onclick: () => queue(mc, L, "") }, t("Скачать", "Download"))];
+      listBox.append(h("div", { class: "item" + (cur ? " sel" : "") }, h("span", { class: "nm" }, v.id), chips, ...acts));
     }
   };
-  root.append(plain(row(verTitle(), hasSel() ? t("Выбранная установка", "Selected installation") : t("Выберите версию из списка ниже", "Pick a version from the list below"),
-    h("button", { class: "btn pri", disabled: STATUS.busy || !hasSel(), onclick: async () => { try { await api("install", {}); pollSoon(); toast(t("Скачивание началось", "Download started")); } catch (e) { toast(e.message); } } }, t("Скачать без запуска", "Download only")))));
   root.append(h("div", { class: "tools" }, seg(types, verFilter, v => { verFilter = v; fill(); }), q), listBox);
-  api("installed").then(r => { instSet = new Set(r.list.map(x => x.mc + "|" + x.loader)); fill(); }).catch(() => {});
+  api("installed").then(r => { verList = r.list; fill(); }).catch(() => {});
   if (VERS) fill();
   else {
     listBox.append(h("div", { class: "empty" }, t("Загрузка списка…", "Loading list…")));
@@ -674,7 +723,7 @@ TABS.versions = () => {
 };
 
 // выбор загрузчика для версии: каждая связка — отдельная установка со своими модами и мирами
-function installModal(mc, forBuild) {
+function installModal(mc, forBuild, onPick) {
   let loader = !forBuild && S.settings.selected === mc ? (S.settings.loader || "vanilla") : "vanilla", lv = "";
   const body = h("div"), box = h("div"), sel = h("select", { style: "width:100%;margin-top:10px", onchange: () => { lv = sel.value; } });
   const info = h("p", { class: "note" });
@@ -696,10 +745,11 @@ function installModal(mc, forBuild) {
   const done = forBuild || (() => {});
   modal(mc, body, [
     { text: t("Отмена", "Cancel") },
-    { text: t("Выбрать", "Select"), fn: async () => {
+    { text: onPick ? t("Скачать", "Download") : t("Выбрать", "Select"), cls: onPick ? "pri" : "", fn: async () => {
+      if (onPick) return onPick(loader, lv);
       if (forBuild) return forBuild({ mc, loader, loaderVer: lv });
       await save({ selected: mc, loader, loaderVer: lv, build: "" }); renderChrome(); renderPage(); } },
-    ...(forBuild ? [] : [{ text: t("Выбрать и скачать", "Select & download"), cls: "pri", fn: async () => {
+    ...(forBuild || onPick ? [] : [{ text: t("Выбрать и скачать", "Select & download"), cls: "pri", fn: async () => {
       await save({ selected: mc, loader, loaderVer: lv, build: "" }); renderChrome();
       try { await api("install", {}); pollSoon(); toast(t("Скачивание началось", "Download started")); } catch (e) { toast(e.message); }
       renderPage(); } }]),
@@ -707,7 +757,7 @@ function installModal(mc, forBuild) {
 }
 
 // каталог
-let catType = "mod", catQ = "", catFilter = true, catSrc = null, catBuild = "";
+let catType = "mod", catQ = "", catFilter = true, catHide = false, catSrc = null, catBuild = "";
 const bq = () => catBuild ? "&build=" + encodeURIComponent(catBuild) : "";
 TABS.catalog = () => {
   const s = S.settings;
@@ -718,7 +768,18 @@ TABS.catalog = () => {
   const q = h("input", { type: "search", placeholder: t("Поиск…", "Search…"), value: catQ, onkeydown: e => { if (e.key === "Enter") { catQ = q.value; run(true); } } });
   const e0 = (catBuild || s.build) ? (s.builds || []).find(b => b.id === (catBuild || s.build)) : null;
   const target = e0 ? e0.name : (s.selected ? instTitle(s.selected, s.loader) : t("выбранной версии", "the selected version"));
-  const filt = h("div", { class: "row", style: "border:0;padding:4px 0" }, h("div", { class: "l" }, t("Только для ", "Only for ") + target), h("div", { class: "c" }, sw(catFilter, v => { catFilter = v; run(true); })));
+  const openFilters = () => {
+    let strict = catFilter, hide = catHide, auto = !s.modDlManual;
+    const box = h("div", { class: "frows" },
+      row(t("Совместимость версий", "Version compatibility"), t("Показывать только то, что подходит для ", "Only show what fits ") + target, sw(strict, v => { strict = v; })),
+      row(t("Не показывать скачанное", "Hide downloaded"), t("Уже установленное скрывается из результатов.", "Already installed items are hidden from the results."), sw(hide, v => { hide = v; })),
+      row(t("Автоскачивание нужной версии", "Auto-pick the right version"), t("Выключите, чтобы перед установкой выбирать конкретный файл.", "Turn off to pick a specific file before installing."), sw(auto, v => { auto = v; })));
+    modal(t("Фильтры", "Filters"), box, [{ text: t("Отмена", "Cancel") }, { text: t("Применить", "Apply"), cls: "pri", fn: async () => {
+      catFilter = strict; catHide = hide;
+      if (auto === !!s.modDlManual) await save({ modDlManual: !auto });
+      run(true); } }]);
+  };
+  const filt = h("button", { class: "btn", onclick: openFilters }, "⚙ " + t("Фильтры", "Filters"));
   let off = 0;
   const instOnly = catType === "installed";
   async function run(reset) {
@@ -731,19 +792,26 @@ TABS.catalog = () => {
       const r = await api("catalog/search?src=" + catSrc + "&type=" + catType + "&q=" + encodeURIComponent(catQ) + "&filter=" + (catFilter ? 1 : 0) + "&offset=" + off + bq());
       $("#cload") && $("#cload").remove();
       if (!r.hits.length && !off) res.append(h("div", { class: "empty" }, t("Ничего не найдено", "Nothing found")));
+      const have = new Set((S.settings.builds || []).map(b => b.name));
+      let shown = 0;
       for (const x of r.hits) {
+        if (catType === "modpack" && have.has(x.title)) x.installed = true;
+        if (catHide && x.installed) continue;
+        shown++;
         const lbl = catType === "modpack" ? t("Скачать сборку", "Get pack") : t("Установить", "Install");
-        const btn = h("button", { class: "btn " + (x.installed ? "ok" : "pri"), disabled: x.installed || x.installing }, x.installed ? "✓ " + t("Установлено", "Installed") : x.installing ? "…" : lbl);
+        const btn = h("button", { class: "btn " + (x.installed ? "ok" : "pri"), disabled: x.installed || x.installing }, x.installed ? "✓ " + t("Установлено", "Installed") : x.installing ? t("Установка…", "Installing…") : lbl);
         const key = catSrc + ":" + catType + ":" + x.id;
         if (x.installing) watchCat(key, btn, lbl);
         btn.onclick = async () => {
           let world = "";
           if (catType === "datapack") { world = await chooseWorld(); if (!world) return; }
-          btn.disabled = true; btn.textContent = "…";
+          let fileId = "";
+          if (s.modDlManual && catType !== "modpack") { fileId = await chooseFile(x); if (!fileId) return; }
+          btn.disabled = true; btn.textContent = t("Установка…", "Installing…");
           try {
-            const j = await api("catalog/install", { id: x.id, type: catType, src: catSrc, world, name: x.title, icon: x.icon, build: catBuild });
-            if (j.job) { pollSoon(); toast(t("Сборка скачивается — прогресс внизу, можно переходить по вкладкам", "Downloading the pack — progress is at the bottom, you can browse freely")); btn.textContent = "✓ " + t("Запущено", "Started"); }
-            else watchCat(key + (world ? ":" + world : ""), btn, lbl);
+            const j = await api("catalog/install", { id: x.id, type: catType, src: catSrc, world, name: x.title, icon: x.icon, build: catBuild, fileId });
+            if (j.pack) { pollSoon(); toast(t("Сборка в очереди — прогресс внизу, можно переходить по вкладкам", "The pack is queued — progress is at the bottom, you can browse freely")); }
+            watchCat(key + (world ? ":" + world : ""), btn, lbl);
           } catch (e) { btn.disabled = false; btn.textContent = lbl; toast(e.message); }
         };
         res.append(h("div", { class: "cat" }, x.icon ? h("img", { src: x.icon, loading: "lazy" }) : h("div", { class: "noimg" }),
@@ -751,11 +819,18 @@ TABS.catalog = () => {
           h("div", { class: "dl" }, fmtN(x.downloads) + " " + t("скач.", "dl")), btn));
       }
       off += r.hits.length;
+      if (catHide && !shown && off < r.total) { run(false); return; }
       more.classList.toggle("hidden", off >= r.total || !r.hits.length);
     } catch (e) { $("#cload") && $("#cload").remove(); res.append(h("div", { class: "empty" }, e.message)); }
   }
   async function runInstalled() {
     res.innerHTML = "";
+    res.append(plain(row(t("Сохранить как сборку", "Save as a build"), t("Всё скачанное (моды, ресурспаки, шейдеры, настройки) копируется в новую сборку под ту же версию.", "Everything downloaded (mods, resource packs, shaders, configs) is copied into a new build for the same version."),
+      h("button", { class: "btn pri", disabled: !(catBuild || hasSel()), onclick: () => {
+        const nm = h("input", { type: "text", placeholder: t("Название сборки", "Build name"), maxlength: 40, style: "width:100%" });
+        modal(t("Сохранить как сборку", "Save as a build"), h("div", null, h("p", null, t("Как назвать новую сборку?", "Name the new build:")), nm), [{ text: t("Отмена", "Cancel") }, { text: t("Сохранить", "Save"), cls: "pri", fn: async () => {
+          try { await api("build/fromcurrent", { name: nm.value.trim(), build: catBuild }); await refresh(); renderChrome(); toast(t("Сборка сохранена — она во вкладке «Сборки»", "Build saved — see the Builds tab")); } catch (e) { toast(e.message); } } }]);
+      } }, t("Сохранить", "Save")))));
     for (const [ty, label, acc] of [["mod", t("Моды", "Mods"), ".jar,.zip"], ["resourcepack", t("Ресурспаки", "Resource packs"), ".zip"], ["shader", t("Шейдеры", "Shaders"), ".zip"], ["datapack", t("Датапаки", "Datapacks"), ".zip"]]) {
       const r = await api("catalog/installed?type=" + ty + bq());
       res.append(h("div", { style: "display:flex;align-items:center;justify-content:space-between" }, h("h3", { class: "sec" }, label),
@@ -775,7 +850,7 @@ TABS.catalog = () => {
   const setVis = () => { const inst = catType === "installed"; filt.classList.toggle("hidden", inst || catType === "modpack"); q.classList.toggle("hidden", inst); srcBox.classList.toggle("hidden", inst); };
   const srcBox = h("div");
   srcBox.append(seg(srcs, catSrc, v => { catSrc = v; run(true); }));
-  const tb = tabs(types, catType, v => { catType = v; renderPage(); });
+  const tb = tabs(types, catType, v => { catType = v; renderPage(true); });
   root.append(tb, h("div", { class: "tools" }, srcBox, q), filt, res, more);
   setVis(); run(true);
   return root;
@@ -786,6 +861,11 @@ let catTimer = 0;
 function watchCat(key, btn, lbl) {
   catWatch.set(key, { btn, lbl });
   if (!catTimer) catTimer = setInterval(async () => {
+    for (const [k, w] of catWatch) {
+      if (!w.btn.isConnected) continue;
+      if (STATUS.cur === k) w.btn.textContent = t("Установка", "Installing") + (STATUS.percent >= 0 ? " " + STATUS.percent + "%" : "…");
+      else if ((STATUS.queue || []).includes(k)) w.btn.textContent = t("В очереди", "Queued");
+    }
     try {
       const r = await api("catalog/active");
       for (const [k, v] of Object.entries(r)) {
@@ -799,6 +879,22 @@ function watchCat(key, btn, lbl) {
   }, 1000);
 }
 const fmtN = n => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "K" : String(n);
+
+function chooseFile(x) {
+  return new Promise(async ok => {
+    const list = h("div", { class: "list", style: "max-height:46vh;overflow:auto" }, h("div", { class: "empty" }, "…"));
+    modal(x.title, h("div", null, h("p", { class: "note" }, t("Выберите файл для установки.", "Pick the file to install.")), list), [{ text: t("Отмена", "Cancel"), fn: () => ok("") }]);
+    try {
+      const r = await api("catalog/files?src=" + catSrc + "&type=" + catType + "&id=" + encodeURIComponent(x.id) + "&strict=" + (catFilter ? 1 : 0) + bq());
+      list.innerHTML = "";
+      if (!r.files.length) list.append(h("div", { class: "empty" }, t("Нет подходящих файлов", "No matching files")));
+      for (const f of r.files) {
+        list.append(h("div", { class: "item", onclick: () => { const L = $("#modalLayer"); L.classList.add("hidden"); L.innerHTML = ""; ok(f.id); } },
+          h("span", { class: "nm" }, h("b", null, f.ver || f.name), h("div", { class: "meta" }, [(f.mc || []).slice(0, 4).join(", "), (f.loaders || []).join(", ")].filter(Boolean).join(" · ")))));
+      }
+    } catch (e) { list.innerHTML = ""; list.append(h("div", { class: "empty" }, e.message)); }
+  });
+}
 
 function chooseWorld() {
   return new Promise(async ok => {
@@ -873,7 +969,8 @@ PAGES.net = () => {
   const s = S.settings, out = [];
   if (!ZT.installed) {
     out.push(plain(row("ZeroTier One", t("Игра по сети работает поверх приложения ZeroTier One (виртуальная локальная сеть, как Radmin). Установите его, запустите и вернитесь сюда.", "Online play runs on top of ZeroTier One (a virtual LAN, like Radmin). Install it, start it and come back here."),
-      h("button", { class: "btn pri", onclick: () => api("openurl", { url: "https://www.zerotier.com/download/" }) }, t("Скачать", "Download")),
+      h("button", { class: "btn pri", onclick: async () => { try { await api("zt/install", {}); pollSoon(); toast(t("Скачиваю и устанавливаю ZeroTier One — подтвердите запрос Windows", "Downloading and installing ZeroTier One — confirm the Windows prompt")); } catch (e) { toast(e.message); } } }, t("Установить", "Install")),
+      h("button", { class: "btn", onclick: () => api("openurl", { url: "https://www.zerotier.com/download/" }) }, t("Сайт", "Website")),
       h("button", { class: "btn", onclick: () => ztRefresh(true) }, t("Проверить", "Check")))));
     return out;
   }

@@ -331,7 +331,11 @@ func (a *App) status() map[string]any {
 	a.gmu.Lock()
 	running := a.gameCmd != nil
 	a.gmu.Unlock()
-	return map[string]any{"busy": a.busy, "kind": a.kind, "stage": a.stage, "percent": pct, "error": a.errMsg, "running": running}
+	q := []string{}
+	for _, j := range a.queue {
+		q = append(q, j.key)
+	}
+	return map[string]any{"busy": a.busy, "kind": a.kind, "stage": a.stage, "percent": pct, "error": a.errMsg, "running": running, "cur": a.curKey, "queue": q}
 }
 
 func (a *App) setStage(s string, done, total int) {

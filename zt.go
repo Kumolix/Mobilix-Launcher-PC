@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -191,7 +193,37 @@ func (a *App) lanPort() int {
 
 func validNwid(id string) bool { return regexp.MustCompile(`^[0-9a-fA-F]{16}$`).MatchString(id) }
 
+// ztInstall скачивает официальный установщик ZeroTier One и запускает его (Windows).
+func (a *App) ztInstall(ctx context.Context) error {
+	if runtime.GOOS != "windows" {
+		return errors.New(a.tr("Установите ZeroTier One командой: curl -s https://install.zerotier.com | sudo bash", "Install ZeroTier One with: curl -s https://install.zerotier.com | sudo bash"))
+	}
+	a.setStage(a.tr("Скачивание ZeroTier One…", "Downloading ZeroTier One…"), 0, 0)
+	dir, err := os.MkdirTemp("", "mobilix-zt")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	msi := filepath.Join(dir, "ZeroTierOne.msi")
+	if err := a.fetchFile(ctx, "https://download.zerotier.com/dist/ZeroTier%20One.msi", msi, "", 0, nil); err != nil {
+		return err
+	}
+	a.setStage(a.tr("Установка ZeroTier One (подтвердите запрос Windows)…", "Installing ZeroTier One (confirm the Windows prompt)…"), 0, 0)
+	ps := "Start-Process msiexec -ArgumentList '/i','" + strings.ReplaceAll(msi, "'", "''") + "','/passive','/norestart' -Verb RunAs -Wait"
+	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps)
+	hideWindow(cmd)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return errors.New(a.tr("Установка не выполнена: ", "Install failed: ") + strings.TrimSpace(string(out)))
+	}
+	a.lg.add("[Mobilix] ZeroTier One " + a.tr("установлен", "installed"))
+	return nil
+}
+
 func (a *App) ztRoutes(mux *http.ServeMux) {
+	a.api(mux, "/api/zt/install", func(w http.ResponseWriter, r *http.Request) {
+		a.enqueue("zt-install", "zt", a.ztInstall)
+		jw(w, map[string]any{"queued": true})
+	})
 	a.api(mux, "/api/zt/status", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 		defer cancel()

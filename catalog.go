@@ -284,8 +284,10 @@ func (a *App) hCatSearch(w http.ResponseWriter, r *http.Request) {
 		v.Set("searchFilter", q.Get("q"))
 		v.Set("pageSize", "20")
 		v.Set("index", strconv.Itoa(off))
-		v.Set("sortField", "2")
-		v.Set("sortOrder", "desc")
+		if q.Get("q") == "" {
+			v.Set("sortField", "2") // без запроса — по популярности
+			v.Set("sortOrder", "desc")
+		}
 		if filter {
 			v.Set("gameVersion", e.MC)
 			if m := cfLoader(e.Loader); m > 0 && typ == "mod" {
@@ -347,7 +349,11 @@ func (a *App) hCatSearch(w http.ResponseWriter, r *http.Request) {
 			} `json:"hits"`
 			Total int `json:"total_hits"`
 		}
-		p := fmt.Sprintf("/search?query=%s&facets=%s&limit=20&offset=%d", url.QueryEscape(q.Get("q")), url.QueryEscape(string(fb)), off)
+		index := "relevance"
+		if q.Get("q") == "" {
+			index = "downloads"
+		}
+		p := fmt.Sprintf("/search?query=%s&facets=%s&limit=20&offset=%d&index=%s", url.QueryEscape(q.Get("q")), url.QueryEscape(string(fb)), off, index)
 		if err := mrGet(ctx, s, p, &res); err != nil {
 			jerr(w, 502, a.tr("Каталог недоступен: ", "Catalog unavailable: ")+err.Error())
 			return
@@ -486,7 +492,14 @@ func (a *App) installProject(ctx context.Context, s Settings, e Eff, src, id, ty
 		return nil, nil
 	}
 	done[id] = true
-	f, deps, err := a.pickFile(ctx, s, e, src, id, typ)
+	var f fileRef
+	var deps []string
+	var err error
+	if fid, _ := ctx.Value(fileIDKey{}).(string); fid != "" && depth == 0 {
+		f, deps, err = a.pickExact(ctx, s, src, id, fid)
+	} else {
+		f, deps, err = a.pickFile(ctx, s, e, src, id, typ)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -541,7 +554,7 @@ func (a *App) hCatActive(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) hCatInstall(w http.ResponseWriter, r *http.Request) {
-	var b struct{ ID, Type, Src, World, Name, Icon, Build string }
+	var b struct{ ID, Type, Src, World, Name, Icon, Build, FileID string }
 	if readBody(r, &b) != nil || b.ID == "" {
 		jerr(w, 400, "bad request")
 		return
@@ -554,12 +567,27 @@ func (a *App) hCatInstall(w http.ResponseWriter, r *http.Request) {
 		b.Src = s.ModSource
 	}
 	if b.Type == "modpack" {
-		err := a.startFn("pack", func(ctx context.Context) error { return a.installModpack(ctx, b.Src, b.ID, b.Name, b.Icon) })
-		if err != nil {
-			jerr(w, 409, err.Error())
+		key := jobKey(b.Src, b.Type, b.ID, "")
+		catJobs.Lock()
+		if catJobs.m[key] == "busy" {
+			catJobs.Unlock()
+			jw(w, map[string]any{"queued": true})
 			return
 		}
-		jw(w, map[string]any{"job": true})
+		catJobs.m[key] = "busy"
+		catJobs.Unlock()
+		a.enqueue(key, "pack", func(ctx context.Context) error {
+			err := a.installModpack(ctx, b.Src, b.ID, b.Name, b.Icon)
+			catJobs.Lock()
+			if err != nil {
+				catJobs.m[key] = "error:" + err.Error()
+			} else {
+				catJobs.m[key] = "done"
+			}
+			catJobs.Unlock()
+			return err
+		})
+		jw(w, map[string]any{"queued": true, "pack": true})
 		return
 	}
 	e := s.effFor(b.Build)
@@ -579,6 +607,9 @@ func (a *App) hCatInstall(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 		defer cancel()
+		if b.FileID != "" {
+			ctx = context.WithValue(ctx, fileIDKey{}, b.FileID)
+		}
 		files, err := a.installProject(ctx, s, e, b.Src, b.ID, b.Type, b.World, 0, map[string]bool{})
 		catJobs.Lock()
 		if err != nil {
@@ -660,4 +691,139 @@ func (a *App) hWorlds(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	jw(w, map[string]any{"worlds": out})
+}
+
+type fileIDKey struct{}
+
+// pickExact — файл, выбранный пользователем вручную.
+func (a *App) pickExact(ctx context.Context, s Settings, src, id, fid string) (fileRef, []string, error) {
+	if src == "curseforge" {
+		var res struct {
+			Data cfFile `json:"data"`
+		}
+		if err := cfDo(ctx, "GET", "/mods/"+id+"/files/"+url.PathEscape(fid), nil, &res); err != nil {
+			return fileRef{}, nil, err
+		}
+		f := res.Data
+		var deps []string
+		for _, d := range f.Dependencies {
+			if d.Rel == 3 {
+				deps = append(deps, strconv.Itoa(d.ModID))
+			}
+		}
+		return fileRef{f.url(), f.FileName, f.sha1()}, deps, nil
+	}
+	var v mrVersion
+	if err := mrGet(ctx, s, "/version/"+url.PathEscape(fid), &v); err != nil {
+		return fileRef{}, nil, err
+	}
+	if len(v.Files) == 0 {
+		return fileRef{}, nil, errors.New("no files")
+	}
+	f := v.Files[0]
+	for _, x := range v.Files {
+		if x.Primary {
+			f = x
+		}
+	}
+	var deps []string
+	for _, d := range v.Dependencies {
+		if d.Type == "required" && d.ProjectID != "" {
+			deps = append(deps, d.ProjectID)
+		}
+	}
+	return fileRef{f.URL, f.Filename, f.Hashes.SHA1}, deps, nil
+}
+
+// hCatFiles: список файлов проекта для ручного выбора (как в мобильном лаунчере).
+func (a *App) hCatFiles(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	typ := q.Get("type")
+	if _, ok := typeDirs[typ]; !ok {
+		typ = "mod"
+	}
+	s := a.settings()
+	src := q.Get("src")
+	if src == "" {
+		src = s.ModSource
+	}
+	e := s.effFor(q.Get("build"))
+	strict := q.Get("strict") == "1" && e.MC != ""
+	id := q.Get("id")
+	if id == "" {
+		jerr(w, 400, "bad request")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	type item struct {
+		ID      string   `json:"id"`
+		Name    string   `json:"name"`
+		Ver     string   `json:"ver"`
+		MC      []string `json:"mc"`
+		Loaders []string `json:"loaders"`
+	}
+	out := []item{}
+	if src == "curseforge" {
+		v := url.Values{}
+		v.Set("pageSize", "50")
+		if strict {
+			v.Set("gameVersion", e.MC)
+			if m := cfLoader(e.Loader); m > 0 && typ == "mod" {
+				v.Set("modLoaderType", strconv.Itoa(m))
+			}
+		}
+		var res struct {
+			Data []struct {
+				cfFile
+				DisplayName string   `json:"displayName"`
+				GameVers    []string `json:"gameVersions"`
+			} `json:"data"`
+		}
+		if err := cfDo(ctx, "GET", "/mods/"+id+"/files?"+v.Encode(), nil, &res); err != nil {
+			jerr(w, 502, err.Error())
+			return
+		}
+		for _, d := range res.Data {
+			it := item{ID: strconv.Itoa(d.ID), Name: d.FileName, Ver: d.DisplayName}
+			for _, g := range d.GameVers {
+				if len(g) > 0 && g[0] >= '0' && g[0] <= '9' {
+					it.MC = append(it.MC, g)
+				} else {
+					it.Loaders = append(it.Loaders, g)
+				}
+			}
+			out = append(out, it)
+		}
+	} else {
+		qq := url.Values{}
+		if strict {
+			b, _ := json.Marshal([]string{e.MC})
+			qq.Set("game_versions", string(b))
+			if ls := mrLoaders(e.Loader); len(ls) > 0 && typ == "mod" {
+				b, _ := json.Marshal(ls)
+				qq.Set("loaders", string(b))
+			}
+		}
+		var vers []struct {
+			mrVersion
+			Name     string   `json:"name"`
+			GameVers []string `json:"game_versions"`
+		}
+		if err := mrGet(ctx, s, "/project/"+url.PathEscape(id)+"/version?"+qq.Encode(), &vers); err != nil {
+			jerr(w, 502, err.Error())
+			return
+		}
+		for _, d := range vers {
+			fn := ""
+			if len(d.Files) > 0 {
+				fn = d.Files[0].Filename
+			}
+			out = append(out, item{d.ID, fn, d.VersionNum, d.GameVers, d.Loaders})
+		}
+	}
+	if len(out) > 60 {
+		out = out[:60]
+	}
+	jw(w, map[string]any{"files": out})
 }

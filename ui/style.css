@@ -242,3 +242,18 @@ h3.sec { margin:18px 0 6px; font-size:14px; color:var(--dim); font-weight:600; t
 .netnode { display:flex; gap:10px; align-items:center; padding:10px 12px; border-radius:12px; background:var(--chip2); margin-bottom:8px; }
 .netnode .st { width:10px; height:10px; border-radius:50%; background:var(--dim); flex:none; } .netnode .st.ok { background:#5BD67B; }
 .netnode .ti { flex:1; min-width:0; } .netnode .ti span { display:block; font-size:12px; color:var(--dim); }
+
+/* плавная смена вкладок без мигания */
+.page.still { animation:none; }
+.pin.fade { animation:pfade .16s ease-out; }
+@keyframes pfade { from { opacity:0; transform:translateY(5px); } }
+#stCancel { border:0; background:var(--chip2); color:var(--txt,inherit); width:22px; height:22px; border-radius:11px; cursor:pointer; margin-left:8px; line-height:22px; padding:0; }
+#stCancel:hover { background:var(--bad,#c0392b); color:#fff; }
+.lchips { display:flex; gap:5px; flex-wrap:wrap; justify-content:flex-end; }
+.tag.chip { cursor:pointer; font:inherit; font-size:11px; opacity:.6; }
+.tag.chip.on { opacity:1; box-shadow:0 0 0 1px var(--accent) inset; }
+.tag.chip.pend { opacity:.9; border-style:dashed; }
+.tag.chip.add { padding:2px 9px; }
+.list .item { cursor:default; }
+.list .item .btn { padding:6px 14px; font-size:13px; }
+.frows .row { padding:8px 0; }

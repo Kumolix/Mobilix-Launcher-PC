@@ -25,7 +25,7 @@ import (
 //go:embed ui
 var uiFS embed.FS
 
-const appVersion = "1.1.1"
+const appVersion = "1.1.2"
 const fixedPort = 52871
 
 func itoa(n int) string { return strconv.Itoa(n) }
@@ -114,6 +114,8 @@ type App struct {
 	total  int
 	errMsg string
 	cancel context.CancelFunc
+	queue  []qjob
+	curKey string
 
 	gmu     sync.Mutex
 	gameCmd *exec.Cmd
@@ -253,6 +255,22 @@ func (a *App) routes() http.Handler {
 	a.api(mux, "/api/build/icon", a.hBuildIcon)
 	a.api(mux, "/api/catalog/active", a.hCatActive)
 	a.ztRoutes(mux)
+	a.api(mux, "/api/install2", func(w http.ResponseWriter, r *http.Request) {
+		var b struct{ MC, Loader, LoaderVer string }
+		if readBody(r, &b) != nil || b.MC == "" {
+			jerr(w, 400, "bad request")
+			return
+		}
+		if b.Loader == "" {
+			b.Loader = "vanilla"
+		}
+		e := Eff{b.MC, b.Loader, b.LoaderVer, ""}
+		a.enqueue(verKeyOf(b.MC, b.Loader), "install", func(ctx context.Context) error { return a.runJobE(ctx, "install", a.settings(), e) })
+		jw(w, map[string]any{"queued": true})
+	})
+	a.api(mux, "/api/version/delete", a.hVersionDelete)
+	a.api(mux, "/api/build/fromcurrent", a.hBuildFromCurrent)
+	a.api(mux, "/api/catalog/files", a.hCatFiles)
 	a.api(mux, "/api/build/export", a.hBuildExport)
 	a.api(mux, "/api/import", a.hImport)
 	a.api(mux, "/api/worlds", a.hWorlds)
@@ -305,6 +323,7 @@ func (a *App) routes() http.Handler {
 	})
 	a.api(mux, "/api/cancel", func(w http.ResponseWriter, r *http.Request) {
 		a.jmu.Lock()
+		a.queue = nil // отмена снимает и очередь
 		if a.cancel != nil {
 			a.cancel()
 		}

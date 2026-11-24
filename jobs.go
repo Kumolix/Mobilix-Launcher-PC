@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -71,8 +72,51 @@ func loaderLabel(l string) string {
 	return "Vanilla"
 }
 
-// startFn запускает фоновую задачу (скачивание, запуск, импорт, обновление); одновременно идёт только одна.
+type qjob struct {
+	key, kind string
+	fn        func(ctx context.Context) error
+}
+
+func verKeyOf(mc, loader string) string { return "ver:" + mc + "|" + loader }
+
+// enqueue ставит задачу в очередь (повторно та же задача не добавляется); очередь идёт по одной.
+func (a *App) enqueue(key, kind string, fn func(ctx context.Context) error) {
+	a.jmu.Lock()
+	dup := a.curKey == key && a.busy
+	for _, j := range a.queue {
+		if j.key == key {
+			dup = true
+		}
+	}
+	if !dup {
+		a.queue = append(a.queue, qjob{key, kind, fn})
+	}
+	a.jmu.Unlock()
+	a.pump()
+}
+
+func (a *App) pump() {
+	a.jmu.Lock()
+	if a.busy || len(a.queue) == 0 {
+		a.jmu.Unlock()
+		return
+	}
+	j := a.queue[0]
+	a.queue = a.queue[1:]
+	a.jmu.Unlock()
+	if err := a.startFnKey(j.key, j.kind, j.fn); err != nil {
+		a.jmu.Lock()
+		a.errMsg = err.Error()
+		a.jmu.Unlock()
+	}
+}
+
+// startFn запускает фоновую задачу (запуск игры, обновление); одновременно идёт только одна.
 func (a *App) startFn(kind string, fn func(ctx context.Context) error) error {
+	return a.startFnKey("", kind, fn)
+}
+
+func (a *App) startFnKey(key, kind string, fn func(ctx context.Context) error) error {
 	a.jmu.Lock()
 	if a.busy {
 		a.jmu.Unlock()
@@ -86,13 +130,14 @@ func (a *App) startFn(kind string, fn func(ctx context.Context) error) error {
 		return errors.New(a.tr("Игра уже запущена", "The game is already running"))
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	a.busy, a.kind, a.errMsg, a.stage, a.done, a.total, a.cancel = true, kind, "", "", 0, 0, cancel
+	a.busy, a.kind, a.errMsg, a.stage, a.done, a.total, a.cancel, a.curKey = true, kind, "", "", 0, 0, cancel, key
 	a.jmu.Unlock()
 	go func() {
 		err := fn(ctx)
 		a.jmu.Lock()
 		a.busy = false
 		a.cancel = nil
+		a.curKey = ""
 		a.stage, a.done, a.total = "", 0, 0
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
@@ -106,17 +151,31 @@ func (a *App) startFn(kind string, fn func(ctx context.Context) error) error {
 			a.lg.add("[Mobilix] " + a.tr("Ошибка: ", "Error: ") + err.Error())
 		}
 		cancel()
+		a.pump()
 	}()
 	return nil
 }
 
 func (a *App) startJob(kind string) error {
-	return a.startFn(kind, func(ctx context.Context) error { return a.runJob(ctx, kind) })
+	if kind == "play" {
+		a.gmu.Lock()
+		running := a.gameCmd != nil
+		a.gmu.Unlock()
+		if running {
+			return errors.New(a.tr("Игра уже запущена", "The game is already running"))
+		}
+	}
+	// задача встаёт в очередь, если сейчас что-то качается
+	a.enqueue("sel:"+kind, kind, func(ctx context.Context) error { return a.runJob(ctx, kind) })
+	return nil
 }
 
 func (a *App) runJob(ctx context.Context, kind string) error {
 	s := a.settings()
-	e := s.eff()
+	return a.runJobE(ctx, kind, s, s.eff())
+}
+
+func (a *App) runJobE(ctx context.Context, kind string, s Settings, e Eff) error {
 	if e.MC == "" {
 		return errors.New(a.tr("Выберите версию Minecraft", "Pick a Minecraft version"))
 	}
@@ -176,6 +235,32 @@ func loaderOfProfile(id string) string {
 		return "fabric"
 	}
 	return "vanilla"
+}
+
+// hVersionDelete удаляет скачанные профили версий (библиотеки и миры не трогает).
+func (a *App) hVersionDelete(w http.ResponseWriter, r *http.Request) {
+	var b struct{ IDs []string }
+	if readBody(r, &b) != nil {
+		jerr(w, 400, "bad request")
+		return
+	}
+	a.jmu.Lock()
+	busy := a.busy
+	a.jmu.Unlock()
+	a.gmu.Lock()
+	running := a.gameCmd != nil
+	a.gmu.Unlock()
+	if busy || running {
+		jerr(w, 409, a.tr("Дождитесь конца загрузки и закройте игру", "Wait for downloads to finish and close the game"))
+		return
+	}
+	for _, id := range b.IDs {
+		if id == "" || id != filepath.Base(id) || strings.ContainsAny(id, `/\`) {
+			continue
+		}
+		_ = os.RemoveAll(a.path("shared", "versions", id))
+	}
+	jw(w, map[string]any{"ok": true})
 }
 
 func (a *App) hLoaders(w http.ResponseWriter, r *http.Request) {
