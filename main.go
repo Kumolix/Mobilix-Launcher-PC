@@ -25,7 +25,7 @@ import (
 //go:embed ui
 var uiFS embed.FS
 
-const appVersion = "1.1.3"
+const appVersion = "1.1.4"
 const fixedPort = 52871
 
 func itoa(n int) string { return strconv.Itoa(n) }

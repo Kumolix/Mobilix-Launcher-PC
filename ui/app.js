@@ -240,7 +240,7 @@ async function toggleVerPopup(force) {
   p.innerHTML = "";
   const s = S.settings;
   let list = [];
-  try { list = (await api("installed")).list; } catch (e) {}
+  try { list = (await api("installed")).list || []; } catch (e) {}
   if (!list.length && !(s.builds || []).length) p.append(h("div", { class: "it", style: "color:var(--dim);cursor:default" }, t("Скачанных версий пока нет", "No downloaded versions yet")));
   for (const x of list) {
     const cur = !s.build && x.mc === s.selected && x.loader === (s.loader || "vanilla");
@@ -683,7 +683,7 @@ TABS.versions = () => {
     if (l === "vanilla" && verList.some(x => x.mc === mc && x.loader !== "vanilla")) { toast(t("Сначала удалите загрузчики этой версии", "Remove this version's loaders first")); return; }
     modal(t("Удалить версию?", "Delete the version?"), h("p", null, instTitle(mc, l) + " — " + t("файлы версии будут удалены; миры и моды останутся.", "version files will be deleted; worlds and mods stay.")),
       [{ text: t("Отмена", "Cancel") }, { text: t("Удалить", "Delete"), cls: "dng", fn: async () => {
-        try { await api("version/delete", { ids }); const r = await api("installed"); verList = r.list; if (!s.build && S.settings.selected === mc && (S.settings.loader || "vanilla") === l) await save({ selected: "", loader: "vanilla", loaderVer: "" }); renderChrome(); fill(); } catch (e) { toast(e.message); } } }]);
+        try { await api("version/delete", { ids }); const r = await api("installed"); verList = r.list || []; if (!s.build && S.settings.selected === mc && (S.settings.loader || "vanilla") === l) await save({ selected: "", loader: "vanilla", loaderVer: "" }); renderChrome(); fill(); } catch (e) { toast(e.message); } } }]);
   };
   const fill = () => {
     listBox.innerHTML = "";
@@ -713,7 +713,7 @@ TABS.versions = () => {
     }
   };
   root.append(h("div", { class: "tools" }, seg(types, verFilter, v => { verFilter = v; fill(); }), q), listBox);
-  api("installed").then(r => { verList = r.list; fill(); }).catch(() => {});
+  api("installed").then(r => { verList = r.list || []; fill(); }).catch(() => {});
   if (VERS) fill();
   else {
     listBox.append(h("div", { class: "empty" }, t("Загрузка списка…", "Loading list…")));
@@ -869,7 +869,7 @@ function watchCat(key, btn, lbl) {
     try {
       const r = await api("catalog/active");
       for (const [k, v] of Object.entries(r)) {
-        const w = catWatch.get(k); if (!w) continue;
+        const w = catWatch.get(k); if (!w || v === "busy") continue;
         catWatch.delete(k);
         if (v === "done") { w.btn.className = "btn ok"; w.btn.disabled = true; w.btn.textContent = "✓ " + t("Установлено", "Installed"); toast(t("Установлено", "Installed")); }
         else { w.btn.disabled = false; w.btn.textContent = w.lbl; toast(v.replace(/^error:/, "")); }

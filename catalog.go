@@ -370,6 +370,13 @@ func (a *App) hCatSearch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	catJobs.Unlock()
+	if typ == "modpack" {
+		for i := range hits {
+			if a.packHave(jobKey(src, typ, hits[i].ID, "")) {
+				hits[i].Installed = true
+			}
+		}
+	}
 	for i := range hits {
 		for k := range idx {
 			if strings.HasPrefix(k, idxKey(src, typ, hits[i].ID, "")) {
@@ -577,7 +584,18 @@ func (a *App) hCatInstall(w http.ResponseWriter, r *http.Request) {
 		catJobs.m[key] = "busy"
 		catJobs.Unlock()
 		a.enqueue(key, "pack", func(ctx context.Context) error {
+			before := map[string]bool{}
+			for _, x := range a.settings().Builds {
+				before[x.ID] = true
+			}
 			err := a.installModpack(ctx, b.Src, b.ID, b.Name, b.Icon)
+			if err == nil {
+				for _, x := range a.settings().Builds {
+					if !before[x.ID] {
+						a.packMark(key, x.ID)
+					}
+				}
+			}
 			catJobs.Lock()
 			if err != nil {
 				catJobs.m[key] = "error:" + err.Error()
@@ -826,4 +844,39 @@ func (a *App) hCatFiles(w http.ResponseWriter, r *http.Request) {
 		out = out[:60]
 	}
 	jw(w, map[string]any{"files": out})
+}
+
+// сборки, установленные из каталога: ключ проекта -> id сборки (чтобы кнопка не возвращалась в «Установить»)
+var packsMu sync.Mutex
+
+func (a *App) packsMap() map[string]string {
+	m := map[string]string{}
+	if b, err := os.ReadFile(a.path("catalog-packs.json")); err == nil {
+		_ = json.Unmarshal(b, &m)
+	}
+	return m
+}
+
+func (a *App) packMark(key, buildID string) {
+	packsMu.Lock()
+	defer packsMu.Unlock()
+	m := a.packsMap()
+	m[key] = buildID
+	b, _ := json.Marshal(m)
+	_ = os.WriteFile(a.path("catalog-packs.json"), b, 0o644)
+}
+
+func (a *App) packHave(key string) bool {
+	packsMu.Lock()
+	id := a.packsMap()[key]
+	packsMu.Unlock()
+	if id == "" {
+		return false
+	}
+	for _, b := range a.settings().Builds {
+		if b.ID == id {
+			return true
+		}
+	}
+	return false
 }

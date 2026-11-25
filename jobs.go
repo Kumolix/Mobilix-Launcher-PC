@@ -210,7 +210,7 @@ func (a *App) runJobE(ctx context.Context, kind string, s Settings, e Eff) error
 
 // installedList перечисляет установки: версия, загрузчик, скачана ли она.
 func (a *App) installedList() []map[string]any {
-	var out []map[string]any
+	out := []map[string]any{}
 	for _, id := range a.installedVersions() {
 		mc, loader := id, "vanilla"
 		if v, err := a.rawProfile(id); err == nil && v.InheritsFrom != "" {
