@@ -24,6 +24,10 @@ jobs:
           go install github.com/tc-hib/go-winres@latest
           "$(go env GOPATH)/bin/go-winres" make --in winres/winres.json --out rsrc
           (cd installer && "$(go env GOPATH)/bin/go-winres" make --in winres/winres.json --out rsrc)
+      - name: ZeroTier One installer (embedded into Setup)
+        run: |
+          curl -fL --retry 3 -o installer/assets/zerotier.msi "https://download.zerotier.com/dist/ZeroTier%20One.msi" || echo "ZeroTier MSI not downloaded; Setup will download it itself"
+          ls -la installer/assets
       - name: Build
         env:
           CF_KEY: ${{ secrets.CURSEFORGE_API }}
@@ -34,8 +38,24 @@ jobs:
           rm -f rsrc_windows_*.syso
           cp dist/Mobilix-Launcher.exe installer/payload.exe
           (cd installer && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -tags installer -ldflags "-s -w -H=windowsgui" -o ../dist/Mobilix-Launcher-Setup.exe .)
-          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.cfKey=${CF_KEY}" -o dist/Mobilix-Launcher-linux-x64 .
-          cd dist && sha256sum * > SHA256SUMS.txt
+      - name: Sign (only if a code-signing certificate is configured)
+        env:
+          PFX_B64: ${{ secrets.CODESIGN_PFX }}
+          PFX_PASS: ${{ secrets.CODESIGN_PASS }}
+        run: |
+          if [ -n "$PFX_B64" ]; then
+            sudo apt-get install -y osslsigncode
+            echo "$PFX_B64" | base64 -d > cert.pfx
+            for f in dist/*.exe; do
+              osslsigncode sign -pkcs12 cert.pfx -pass "$PFX_PASS" -n "Mobilix Launcher" -i https://kumolix.github.io -h sha256 \
+                -ts http://timestamp.digicert.com -in "$f" -out "$f.signed" && mv "$f.signed" "$f"
+            done
+            rm -f cert.pfx
+          else
+            echo "No CODESIGN_PFX secret: exe files are not signed"
+          fi
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
           name: Mobilix-Launcher-PC

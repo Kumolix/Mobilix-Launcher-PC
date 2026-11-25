@@ -5,6 +5,7 @@
 package main
 
 import (
+	"embed"
 	_ "embed"
 	"os"
 	"os/exec"
@@ -16,6 +17,11 @@ import (
 
 //go:embed payload.exe
 var payload []byte
+
+// assets: в сборке на GitHub сюда кладётся официальный zerotier.msi (в локальной сборке его может не быть — тогда скачивается).
+//
+//go:embed all:assets
+var assets embed.FS
 
 const (
 	appName = "Mobilix Launcher"
@@ -112,12 +118,23 @@ func installZeroTier() {
 	if _, err := os.Stat(filepath.Join(pd, "ZeroTier", "One")); err == nil {
 		return
 	}
-	if box("Установить ZeroTier One?\n\nОн нужен для игры по сети с друзьями без настройки роутера (создаёт виртуальную сеть). Файл (~10 МБ) скачивается с официального сайта zerotier.com.", mbYesNo|mbIconQ) != idYes {
+	if box("Установить ZeroTier One?\n\nОн нужен для игры по сети с друзьями без настройки роутера (создаёт виртуальную сеть). Установщик ZeroTier официальный, от zerotier.com.", mbYesNo|mbIconQ) != idYes {
 		return
 	}
-	err := ps(`$ErrorActionPreference='Stop';[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;` +
-		`$f=Join-Path $env:TEMP 'ZeroTierOne.msi';Invoke-WebRequest -UseBasicParsing 'https://download.zerotier.com/dist/ZeroTier%20One.msi' -OutFile $f;` +
-		`$p=Start-Process msiexec -ArgumentList '/i',$f,'/qn','/norestart' -Wait -PassThru;Remove-Item $f -ErrorAction SilentlyContinue;exit $p.ExitCode`)
+	var err error
+	if msi, e := assets.ReadFile("assets/zerotier.msi"); e == nil && len(msi) > 1<<20 {
+		f := filepath.Join(os.TempDir(), "ZeroTierOne.msi")
+		if err = os.WriteFile(f, msi, 0o644); err == nil {
+			cmd := exec.Command("msiexec", "/i", f, "/qn", "/norestart")
+			cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+			err = cmd.Run()
+			os.Remove(f)
+		}
+	} else {
+		err = ps(`$ErrorActionPreference='Stop';[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;` +
+			`$f=Join-Path $env:TEMP 'ZeroTierOne.msi';Invoke-WebRequest -UseBasicParsing 'https://download.zerotier.com/dist/ZeroTier%20One.msi' -OutFile $f;` +
+			`$p=Start-Process msiexec -ArgumentList '/i',$f,'/qn','/norestart' -Wait -PassThru;Remove-Item $f -ErrorAction SilentlyContinue;exit $p.ExitCode`)
+	}
 	if err != nil {
 		box("ZeroTier One не установился. Его можно поставить позже кнопкой «Установить» на странице «Игра по сети» в лаунчере.", mbIconErr)
 	}

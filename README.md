@@ -3,7 +3,7 @@
 Основано на [Mobilix Launcher for Minecraft](https://github.com/Kumolix/Mobilix-Launcher-for-Minecraft), автор Kumolix.
 Based on Mobilix Launcher for Minecraft by Kumolix.
 
-Лаунчер Minecraft: Java Edition для Windows 10/11 и Linux в оформлении мобильного Mobilix, горизонтальный вид. Один .exe, без установки.
+Лаунчер Minecraft: Java Edition для Windows 10/11 в оформлении мобильного Mobilix, горизонтальный вид. Один .exe, без установки.
 
 ## Что внутри
 - Vanilla и Fabric, любые версии из манифеста Mojang, скачивание библиотек и ресурсов в несколько потоков с проверкой sha1.
@@ -18,7 +18,7 @@ Based on Mobilix Launcher for Minecraft by Kumolix.
 4. Боковое меню выезжает при наведении мыши на левый край и убирается, когда мышь ушла. У нижнего меню иконки при наведении увеличиваются и выходят за края панели.
 
 ## Запуск
-Скачайте `Mobilix-Launcher.exe` из Actions (артефакт `Mobilix-Launcher-PC`) и запустите. Окно рисуется встроенным Microsoft Edge (WebView2/Edge есть в Windows 10 и 11) или Chrome. Данные лежат в `%AppData%\Mobilix` (Linux: `~/.config/Mobilix`).
+Скачайте `Mobilix-Launcher.exe` из Actions (артефакт `Mobilix-Launcher-PC`) и запустите. Окно рисуется встроенным Microsoft Edge (WebView2/Edge есть в Windows 10 и 11) или Chrome. Данные лежат в `%AppData%\Mobilix`.
 
 Вход через Microsoft пока не поддерживается: игра запускается в офлайн-режиме с ником.
 

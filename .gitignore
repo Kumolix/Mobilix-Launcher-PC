@@ -4,3 +4,4 @@ dist/
 rsrc_*.syso
 installer/payload.exe
 installer/rsrc_*.syso
+installer/assets/zerotier.msi
