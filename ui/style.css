@@ -47,7 +47,7 @@ canvas.pix { image-rendering:pixelated; display:block; }
 #stage { flex:1; min-height:0; padding:2px 16px 6px; display:flex; gap:16px; container-type:size; }
 #skinCol { height:100%; width:100cqh; display:flex; flex-direction:column; gap:6px; flex:none; }
 #loginTag { position:absolute; top:10px; left:50%; transform:translateX(-50%); z-index:4; font-size:13px; font-weight:600; padding:4px 14px; border-radius:11px; color:var(--accent); background:color-mix(in srgb,var(--drawer) 80%,transparent); border:1px solid color-mix(in srgb,var(--act) 55%,transparent); white-space:nowrap; }
-#right { flex:1; min-width:0; display:flex; align-items:flex-end; justify-content:center; }
+#right { flex:1; min-width:0; display:flex; flex-direction:column; align-items:center; justify-content:space-between; gap:12px; }
 #skinLoad { position:absolute; inset:0; display:none; align-items:center; justify-content:center; color:var(--dim); font-size:16px; z-index:3; background:color-mix(in srgb,var(--skinBg) 92%,transparent); }
 #skinCard.loading #skinLoad { display:flex; }
 #skinCard.loading #skinView, #skinCard.loading #ground { visibility:hidden; }
@@ -227,7 +227,7 @@ h3.sec { margin:18px 0 6px; font-size:14px; color:var(--dim); font-weight:600; t
 @media (max-width:900px) { #playGroup { width:100%; } #playBtn { width:160px; } }
 
 .cbtn { position:absolute; bottom:10px; width:42px; height:42px; border-radius:11px; background:var(--drawer); border:2px solid var(--accent); z-index:4; display:flex; align-items:center; justify-content:center; padding:0; }
-#fxBtn { right:10px; } #ztBtn { left:10px; }
+#fxBtn { right:10px; }
 .cbtn.off { opacity:.45; } .cbtn.ztok { border-color:#5BD67B; box-shadow:0 0 10px color-mix(in srgb,var(--accent) 60%,transparent); }
 #fx { position:fixed; inset:0; width:100%; height:100%; pointer-events:none; z-index:0; }
 .tabs.top { gap:0; margin:-2px -22px 14px; border-bottom:1px solid var(--line); background:var(--bar); }
@@ -257,3 +257,15 @@ h3.sec { margin:18px 0 6px; font-size:14px; color:var(--dim); font-weight:600; t
 .list .item { cursor:default; }
 .list .item .btn { padding:6px 14px; font-size:13px; }
 .frows .row { padding:8px 0; }
+
+/* ZeroTier на главном экране: над кнопками версии и «Играть» */
+#ztPanel { width:min(640px,100%); display:flex; flex-direction:column; align-items:center; gap:6px; padding-top:4px; }
+#ztPanel.hidden { display:none; }
+#ztTitle { font-size:24px; font-weight:600; letter-spacing:.06em; color:var(--text); }
+#ztJoin { background:none; border:0; padding:2px 8px; font:inherit; font-size:14px; color:var(--accent); cursor:pointer; text-decoration:underline; text-underline-offset:3px; }
+#ztJoin:hover { filter:brightness(1.25); }
+#ztPower { width:72px; height:72px; border-radius:20px; background:var(--chip); border:2px solid var(--line,rgba(255,255,255,.14)); color:var(--text2); cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0; transition:.2s; }
+#ztPower svg { width:34px; height:34px; fill:none; stroke:currentColor; stroke-width:2.4; stroke-linecap:round; }
+#ztPower:hover { filter:brightness(1.15); }
+#ztPower:active { transform:scale(.95); }
+#ztPower.on { color:#fff; background:linear-gradient(160deg,#3ecb6b,#1f9e4a); border-color:#5BD67B; box-shadow:0 0 18px color-mix(in srgb,#5BD67B 55%,transparent); }

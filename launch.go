@@ -151,6 +151,23 @@ func (a *App) launch(ctx context.Context, v *Version, s Settings, e Eff, java st
 	if s.Fullscreen {
 		game = append(game, "--fullscreen")
 	}
+	if s.JoinNext && strings.TrimSpace(s.JoinIP) != "" {
+		ip := strings.TrimSpace(s.JoinIP)
+		if mcMinor(e.MC) >= 20 {
+			game = append(game, "--quickPlayMultiplayer", ip)
+		} else {
+			host, port := ip, ""
+			if i := strings.LastIndex(ip, ":"); i > 0 && strings.Count(ip, ":") == 1 {
+				host, port = ip[:i], ip[i+1:]
+			}
+			game = append(game, "--server", host)
+			if port != "" {
+				game = append(game, "--port", port)
+			}
+		}
+		a.lg.add("[Mobilix] " + a.tr("Подключение к серверу: ", "Joining server: ") + ip)
+		a.saveSettings(func(x *Settings) { x.JoinNext = false }) // только на один запуск
+	}
 	full := append(append(append(args, jvm...), mainClass), game...)
 	a.lg.add("[Mobilix] Java: " + java)
 	a.lg.add("[Mobilix] " + a.tr("Папка игры: ", "Game folder: ") + gdir)

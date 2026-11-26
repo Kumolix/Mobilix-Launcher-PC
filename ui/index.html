@@ -26,7 +26,6 @@
     <div id="skinCol">
       <section id="skinCard" class="card loading">
         <div id="loginTag"></div>
-        <button class="cbtn hidden" id="ztBtn"></button>
         <button class="cbtn hidden" id="fxBtn"></button>
         <div id="skinView"></div>
         <div id="skinLoad"></div>
@@ -46,6 +45,11 @@
       </section>
     </div>
     <div id="right">
+      <div id="ztPanel" class="hidden">
+        <div id="ztTitle">ZeroTier</div>
+        <button id="ztJoin"></button>
+        <button id="ztPower" aria-label="ZeroTier"></button>
+      </div>
       <div id="playGroup">
         <div id="statusRow"><span id="stText"></span><span id="stPct"></span><button id="stCancel" class="hidden" onclick="api('cancel',{}).then(pollSoon)">✕</button></div>
         <div id="progress"><i></i></div>

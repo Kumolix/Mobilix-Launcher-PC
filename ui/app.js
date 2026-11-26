@@ -1055,7 +1055,7 @@ function fxStart() {
 // кнопки у скина: эффекты (только в праздничную неделю) и ZeroTier (если включена в настройках сети)
 function renderFxBtns() {
   if (!S) return;
-  const s = S.settings, fb = $("#fxBtn"), zb = $("#ztBtn"), sn = season();
+  const s = S.settings, fb = $("#fxBtn"), sn = season();
   fb.classList.toggle("hidden", !sn);
   if (sn) {
     fb.classList.toggle("off", !s.fxOn); fb.innerHTML = "";
@@ -1063,16 +1063,35 @@ function renderFxBtns() {
     const pal = FX_PAL[sn][nm]; pal.__fx = 1; fb.append(pixIcon(nm, pal, 3));
     fb.onclick = async () => { await save({ fxOn: !s.fxOn }); renderFxBtns(); fxStart(); };
   }
-  zb.classList.toggle("hidden", !s.ztButton);
-  if (s.ztButton) {
-    zb.classList.toggle("off", !s.ztOn); zb.classList.toggle("ztok", !!s.ztOn); zb.innerHTML = ""; zb.append(pixIcon("NET", MENU_PAL, 2));
-    zb.title = s.ztOn ? t("ZeroTier включён — нажмите, чтобы выключить", "ZeroTier is on — click to turn off") : t("Включить ZeroTier", "Turn ZeroTier on");
-    zb.onclick = async () => {
-      if (!s.ztNets || !s.ztNets.length) { toast(t("Сначала добавьте сеть на странице «Сеть»", "Add a network on the Network page first")); openPage("net"); return; }
-      try { await api("zt/toggle", { on: !s.ztOn }); await refresh(); renderFxBtns(); toast(S.settings.ztOn ? t("ZeroTier включён", "ZeroTier on") : t("ZeroTier выключен", "ZeroTier off")); }
-      catch (e) { toast(e.message); }
-    };
-  }
+  renderZt();
+}
+
+function renderZt() {
+  const s = S.settings, box = $("#ztPanel"), pw = $("#ztPower"), jn = $("#ztJoin");
+  box.classList.toggle("hidden", !s.ztButton);
+  if (!s.ztButton) return;
+  pw.classList.toggle("on", !!s.ztOn);
+  pw.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 3v9"/><path d="M6.4 6.9a8 8 0 1 0 11.2 0"/></svg>';
+  pw.title = s.ztOn ? t("ZeroTier включён — нажмите, чтобы выключить", "ZeroTier is on — click to turn off") : t("Включить ZeroTier", "Turn ZeroTier on");
+  pw.onclick = async () => {
+    if (!s.ztNets || !s.ztNets.length) { toast(t("Сначала добавьте сеть на странице «Игра по сети»", "Add a network on the Network page first")); openPage("net"); return; }
+    try { await api("zt/toggle", { on: !s.ztOn }); await refresh(); renderZt(); toast(S.settings.ztOn ? t("ZeroTier включён", "ZeroTier on") : t("ZeroTier выключен", "ZeroTier off")); }
+    catch (e) { toast(e.message); }
+  };
+  jn.textContent = t("Подключиться по IP", "Join by IP");
+  jn.onclick = () => {
+    if (!hasSel()) { toast(t("Сначала выберите версию игры", "Pick a game version first")); return; }
+    const inp = h("input", { type: "text", placeholder: "10.147.17.5:25565", value: s.joinIP || "", style: "width:100%", maxlength: 80 });
+    modal(t("Подключиться по IP", "Join by IP"), h("div", null,
+      h("p", null, t("Адрес сервера или друга в сети ZeroTier (ip:порт). Игра запустится и сама зайдёт на сервер.", "Address of a server or a friend on the ZeroTier network (ip:port). The game starts and joins by itself.")), inp),
+      [{ text: t("Отмена", "Cancel") }, { text: t("Играть и подключиться", "Play and join"), cls: "pri", fn: async () => {
+        const ip = inp.value.trim();
+        if (!ip) { toast(t("Введите адрес", "Enter the address")); return; }
+        await save({ joinIP: ip, joinNext: true });
+        onPlay();
+      } }]);
+    setTimeout(() => inp.focus(), 50);
+  };
 }
 
 // --- соцсети ---
