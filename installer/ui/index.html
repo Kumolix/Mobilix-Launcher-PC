@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{--bg:#0b100d;--card:#121a15;--chip:#1b2620;--line:#25382c;--acc:#2fbf5a;--acc2:#1f9e4a;--txt:#e8f3ec;--dim:#8fa597}
+*{box-sizing:border-box;margin:0}
+html,body{height:100%}
+body{background:radial-gradient(900px 500px at 20% -10%,#12301d 0,transparent 60%),radial-gradient(700px 500px at 110% 110%,#0f2a1a 0,transparent 60%),var(--bg);color:var(--txt);font:15px/1.45 "Segoe UI",system-ui,sans-serif;display:flex;flex-direction:column;padding:26px 30px 22px;overflow:hidden;user-select:none}
+.head{display:flex;align-items:center;gap:16px;margin-bottom:20px}
+.head img{width:64px;height:64px;border-radius:16px}
+.head h1{font-size:25px;font-weight:700;letter-spacing:.02em;color:#6fe08d}
+.head p{color:var(--dim);font-size:13px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:6px 18px}
+.opt{display:flex;align-items:center;gap:14px;padding:14px 0;cursor:pointer;border-bottom:1px solid var(--line)}
+.opt:last-child{border-bottom:0}
+.opt.off{cursor:default;opacity:.55}
+.box{flex:none;width:28px;height:28px;border-radius:9px;border:2px solid var(--line);background:var(--chip);display:flex;align-items:center;justify-content:center;transition:.15s}
+.box svg{width:18px;height:18px;stroke:#04170b;stroke-width:3.2;fill:none;stroke-linecap:round;stroke-linejoin:round;opacity:0;transition:.15s}
+.opt.on .box{background:linear-gradient(160deg,#3ecb6b,var(--acc2));border-color:#5BD67B;box-shadow:0 0 12px #2fbf5a55}
+.opt.on .box svg{opacity:1}
+.opt b{display:block;font-size:16px}
+.opt span{color:var(--dim);font-size:13px}
+.path{margin-top:14px;color:var(--dim);font-size:12.5px;word-break:break-all}
+.path i{font-style:normal;color:var(--txt)}
+.sp{flex:1}
+.bar{height:12px;border-radius:7px;background:var(--chip);overflow:hidden;border:1px solid var(--line)}
+.bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--acc2),#6fe08d);transition:width .25s}
+.msg{margin:10px 0 4px;color:var(--dim);font-size:13px;min-height:20px}
+.btns{display:flex;gap:12px;justify-content:flex-end;margin-top:16px}
+button{font:inherit;font-weight:600;border:0;border-radius:14px;padding:13px 26px;cursor:pointer;color:var(--txt);background:var(--chip);transition:.15s}
+button:hover{filter:brightness(1.2)}
+button.pri{background:linear-gradient(160deg,#3ecb6b,var(--acc2));color:#04170b;min-width:170px;font-size:16px;letter-spacing:.04em}
+button:disabled{opacity:.4;cursor:default;filter:none}
+.page{display:none;flex:1;flex-direction:column}.page.on{display:flex}
+.done{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;gap:8px;text-align:center}
+.done .ok{width:84px;height:84px;border-radius:26px;background:linear-gradient(160deg,#3ecb6b,var(--acc2));display:flex;align-items:center;justify-content:center;box-shadow:0 0 30px #2fbf5a66}
+.done .ok svg{width:44px;height:44px;stroke:#04170b;stroke-width:3.4;fill:none;stroke-linecap:round;stroke-linejoin:round}
+.err{color:#ff8a8a}
+</style></head><body>
+<div class="head"><img src="__ICON__" alt=""><div><h1>Mobilix Launcher</h1><p>Установка · Kumolix</p></div></div>
+
+<div class="page on" id="p1">
+  <div class="card">
+    <div class="opt on" id="oL" onclick="tog('L')"><div class="box"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div><div><b>Лаунчер</b><span>Mobilix для ПК, ярлыки на рабочем столе и в меню «Пуск»</span></div></div>
+    <div class="opt on" id="oZ" onclick="tog('Z')"><div class="box"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div><div><b>ZeroTier One</b><span id="zs">Виртуальная сеть для игры с друзьями без настройки роутера</span></div></div>
+  </div>
+  <div class="path">Папка установки: <i id="dir"></i></div>
+  <div class="sp"></div>
+  <div class="btns"><button onclick="goClose()">Отмена</button><button class="pri" id="go" onclick="start()">Установить</button></div>
+</div>
+
+<div class="page" id="p2">
+  <div class="sp"></div>
+  <div class="msg" id="msg" style="font-size:15px;color:var(--txt)">Подготовка…</div>
+  <div class="bar"><i id="fill"></i></div>
+  <div class="sp"></div>
+</div>
+
+<div class="page" id="p3">
+  <div class="done"><div class="ok"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div>
+    <h2 id="dt" style="font-size:22px">Готово!</h2><p id="dm" style="color:var(--dim)"></p></div>
+  <div class="btns"><button onclick="goClose()">Закрыть</button><button class="pri" id="run" onclick="goLaunch()">Запустить Mobilix</button></div>
+</div>
+
+<script>
+var sel={L:true,Z:true},zdone=false;
+function tog(k){var o=document.getElementById('o'+k);if(o.classList.contains('off'))return;sel[k]=!sel[k];o.classList.toggle('on',sel[k]);document.getElementById('go').disabled=!(sel.L||sel.Z)}
+function show(n){['p1','p2','p3'].forEach(function(p){document.getElementById(p).classList.toggle('on',p==='p'+n)})}
+function start(){show(2);goInstall(sel.L,sel.Z)}
+function progress(p,m){document.getElementById('fill').style.width=p+'%';document.getElementById('msg').textContent=m}
+function finish(ok,m,launcher){show(3);var t=document.getElementById('dt');t.textContent=ok?'Готово!':'Не всё удалось';t.className=ok?'':'err';document.getElementById('dm').textContent=m;document.getElementById('run').style.display=launcher?'':'none'}
+goInfo().then(function(i){document.getElementById('dir').textContent=i.dir;
+ if(i.zt){var o=document.getElementById('oZ');o.classList.remove('on');o.classList.add('off');sel.Z=false;document.getElementById('zs').textContent='Уже установлен на этом компьютере'}
+ if(i.upd){document.querySelector('#oL b').textContent='Лаунчер (обновление)'}});
+</script></body></html>

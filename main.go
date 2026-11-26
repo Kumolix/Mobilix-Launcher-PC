@@ -25,7 +25,7 @@ import (
 //go:embed ui
 var uiFS embed.FS
 
-const appVersion = "1.1.5"
+const appVersion = "1.1.6"
 const fixedPort = 52871
 
 func itoa(n int) string { return strconv.Itoa(n) }
@@ -86,6 +86,7 @@ type Settings struct {
 	ZtNets      []ZtNet  `json:"ztNets"`
 	ZtButton    bool     `json:"ztButton"` // кнопка ZeroTier на главном экране
 	ZtOn        bool     `json:"ztOn"`
+	ZtApi       string   `json:"ztApi"`    // токен ZeroTier Central (my.zerotier.com → Account → API Access Tokens)
 	JoinIP      string   `json:"joinIP"`   // последний адрес «Подключиться по IP»
 	JoinNext    bool     `json:"joinNext"` // следующий запуск сразу заходит на сервер JoinIP
 	FxOn        bool     `json:"fxOn"` // праздничные эффекты

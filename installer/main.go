@@ -7,13 +7,23 @@ package main
 import (
 	"embed"
 	_ "embed"
+	"encoding/base64"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"unsafe"
+
+	webview2 "github.com/jchv/go-webview2"
 )
+
+//go:embed ui/index.html
+var uiHTML string
+
+//go:embed ui/icon.png
+var uiIcon []byte
 
 //go:embed payload.exe
 var payload []byte
@@ -65,25 +75,27 @@ func installDir() string {
 	return filepath.Join(pf, appName)
 }
 
-func main() {
-	dir := installDir()
-	if len(os.Args) > 1 && strings.EqualFold(os.Args[1], "/uninstall") {
-		uninstall(dir)
-		return
+func zeroTierPresent() bool {
+	pd := os.Getenv("ProgramData")
+	if pd == "" {
+		pd = `C:\ProgramData`
 	}
-	if box("Установить "+appName+" в папку:\n"+dir+"\n\nБудут созданы ярлыки на рабочем столе и в меню «Пуск».", mbYesNo|mbIconQ) != idYes {
-		return
-	}
+	_, err := os.Stat(filepath.Join(pd, "ZeroTier", "One"))
+	return err == nil
+}
+
+// installLauncher копирует лаунчер, создаёт ярлыки и запись об удалении.
+func installLauncher(dir string, step func(int, string)) error {
+	step(5, "Закрываю запущенный лаунчер…")
 	_ = run("taskkill", "/IM", exeName, "/F")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		box("Не удалось создать папку: "+err.Error(), mbIconErr)
-		return
+		return fmt.Errorf("не удалось создать папку: %w", err)
 	}
 	exe := filepath.Join(dir, exeName)
 	_ = os.Remove(exe + ".old")
+	step(15, "Копирую файлы лаунчера…")
 	if err := os.WriteFile(exe, payload, 0o755); err != nil {
-		box("Не удалось записать файл: "+err.Error(), mbIconErr)
-		return
+		return fmt.Errorf("не удалось записать файл: %w", err)
 	}
 	// чтобы лаунчер мог обновлять сам себя без прав администратора
 	_ = run("icacls", dir, "/grant", "*S-1-5-32-545:(OI)(CI)M", "/T", "/C", "/Q")
@@ -91,9 +103,11 @@ func main() {
 	if b, err := os.ReadFile(self); err == nil {
 		_ = os.WriteFile(filepath.Join(dir, "Uninstall.exe"), b, 0o755)
 	}
+	step(35, "Создаю ярлыки…")
 	ps(`$s=New-Object -ComObject WScript.Shell;` +
 		`foreach($p in @([Environment]::GetFolderPath('CommonDesktopDirectory'),[Environment]::GetFolderPath('CommonPrograms'))){` +
 		`$l=$s.CreateShortcut((Join-Path $p '` + appName + `.lnk'));$l.TargetPath='` + exe + `';$l.WorkingDirectory='` + dir + `';$l.IconLocation='` + exe + `,0';$l.Save()}`)
+	step(45, "Регистрирую в «Установке и удалении программ»…")
 	for _, kv := range [][]string{
 		{"DisplayName", appName}, {"DisplayIcon", exe}, {"Publisher", "Kumolix"}, {"InstallLocation", dir},
 		{"UninstallString", `"` + filepath.Join(dir, "Uninstall.exe") + `" /uninstall`},
@@ -102,25 +116,11 @@ func main() {
 		_ = run("reg", "add", regKey, "/v", kv[0], "/t", "REG_SZ", "/d", kv[1], "/f")
 	}
 	_ = run("reg", "add", regKey, "/v", "NoModify", "/t", "REG_DWORD", "/d", "1", "/f")
-	installZeroTier()
-	if box("Готово! Запустить "+appName+" сейчас?", mbYesNo|mbIconInfo) == idYes {
-		_ = exec.Command("explorer.exe", exe).Start() // от имени обычного пользователя
-	}
+	return nil
 }
 
-// installZeroTier ставит ZeroTier One (виртуальная сеть для игры с друзьями), если его ещё нет.
-// Установщик уже работает с правами администратора, поэтому MSI ставится тихо.
-func installZeroTier() {
-	pd := os.Getenv("ProgramData")
-	if pd == "" {
-		pd = `C:\ProgramData`
-	}
-	if _, err := os.Stat(filepath.Join(pd, "ZeroTier", "One")); err == nil {
-		return
-	}
-	if box("Установить ZeroTier One?\n\nОн нужен для игры по сети с друзьями без настройки роутера (создаёт виртуальную сеть). Установщик ZeroTier официальный, от zerotier.com.", mbYesNo|mbIconQ) != idYes {
-		return
-	}
+// installZeroTier ставит ZeroTier One (MSI вшит в установщик, иначе скачивается с zerotier.com). Тихо: установщик уже с правами администратора.
+func installZeroTier() error {
 	var err error
 	if msi, e := assets.ReadFile("assets/zerotier.msi"); e == nil && len(msi) > 1<<20 {
 		f := filepath.Join(os.TempDir(), "ZeroTierOne.msi")
@@ -135,8 +135,84 @@ func installZeroTier() {
 			`$f=Join-Path $env:TEMP 'ZeroTierOne.msi';Invoke-WebRequest -UseBasicParsing 'https://download.zerotier.com/dist/ZeroTier%20One.msi' -OutFile $f;` +
 			`$p=Start-Process msiexec -ArgumentList '/i',$f,'/qn','/norestart' -Wait -PassThru;Remove-Item $f -ErrorAction SilentlyContinue;exit $p.ExitCode`)
 	}
-	if err != nil {
-		box("ZeroTier One не установился. Его можно поставить позже кнопкой «Установить» на странице «Игра по сети» в лаунчере.", mbIconErr)
+	return err
+}
+
+func main() {
+	dir := installDir()
+	if len(os.Args) > 1 && strings.EqualFold(os.Args[1], "/uninstall") {
+		uninstall(dir)
+		return
+	}
+	exe := filepath.Join(dir, exeName)
+	w := webview2.NewWithOptions(webview2.WebViewOptions{
+		AutoFocus:     true,
+		DataPath:      filepath.Join(os.TempDir(), "mobilix-setup-wv2"),
+		WindowOptions: webview2.WindowOptions{Title: "Установка " + appName, Width: 760, Height: 520, IconId: 1, Center: true},
+	})
+	if w == nil {
+		legacy(dir)
+		return
+	}
+	defer w.Destroy()
+	w.SetSize(760, 520, webview2.HintFixed)
+	step := func(p int, m string) {
+		w.Dispatch(func() { w.Eval(fmt.Sprintf("progress(%d,%q)", p, m)) })
+	}
+	w.Bind("goInfo", func() map[string]any {
+		_, upd := os.Stat(exe)
+		return map[string]any{"dir": dir, "zt": zeroTierPresent(), "upd": upd == nil}
+	})
+	w.Bind("goClose", func() { w.Dispatch(func() { w.Terminate() }) })
+	w.Bind("goLaunch", func() {
+		_ = exec.Command("explorer.exe", exe).Start() // от имени обычного пользователя
+		w.Dispatch(func() { w.Terminate() })
+	})
+	w.Bind("goInstall", func(launcher, zt bool) {
+		go func() {
+			var errs []string
+			if launcher {
+				if err := installLauncher(dir, step); err != nil {
+					errs = append(errs, err.Error())
+					launcher = false
+				}
+			}
+			if zt {
+				step(55, "Устанавливаю ZeroTier One…")
+				if err := installZeroTier(); err != nil {
+					errs = append(errs, "ZeroTier One не установился — его можно поставить позже на странице «Игра по сети» в лаунчере.")
+				}
+			}
+			step(100, "Готово")
+			msg := "Всё установлено."
+			if len(errs) > 0 {
+				msg = strings.Join(errs, " ")
+			}
+			ok := len(errs) == 0
+			w.Dispatch(func() { w.Eval(fmt.Sprintf("finish(%t,%q,%t)", ok, msg, launcher)) })
+		}()
+	})
+	html := strings.Replace(uiHTML, "__ICON__", "data:image/png;base64,"+base64.StdEncoding.EncodeToString(uiIcon), 1)
+	w.SetHtml(html)
+	w.Run()
+}
+
+// legacy — запасной вариант без WebView2: диалоговые окна Windows.
+func legacy(dir string) {
+	if box("Установить "+appName+" в папку:\n"+dir+"\n\nБудут созданы ярлыки на рабочем столе и в меню «Пуск».", mbYesNo|mbIconQ) != idYes {
+		return
+	}
+	if err := installLauncher(dir, func(int, string) {}); err != nil {
+		box(err.Error(), mbIconErr)
+		return
+	}
+	if !zeroTierPresent() && box("Установить ZeroTier One?\n\nОн нужен для игры по сети с друзьями.", mbYesNo|mbIconQ) == idYes {
+		if installZeroTier() != nil {
+			box("ZeroTier One не установился. Его можно поставить позже в лаунчере.", mbIconErr)
+		}
+	}
+	if box("Готово! Запустить "+appName+" сейчас?", mbYesNo|mbIconInfo) == idYes {
+		_ = exec.Command("explorer.exe", filepath.Join(dir, exeName)).Start()
 	}
 }
 

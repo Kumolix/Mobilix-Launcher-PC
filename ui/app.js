@@ -963,6 +963,60 @@ async function ztRefresh(force) {
   if (changed || force === true) { if (page === "net") renderPage(); renderFxBtns(); }
 }
 function ztSchedule() { clearTimeout(ztTimer); ztTimer = setTimeout(async () => { if (page === "net") { await ztRefresh(); ztSchedule(); } else ztTimer = 0; }, 5000); }
+// --- ZeroTier Central: создать и настроить свою сеть по токену ---
+let ZTC = { nets: null, err: "", open: {}, mem: {} };
+async function ztcLoad() {
+  try { ZTC.nets = (await api("zt/central/networks")).nets; ZTC.err = ""; } catch (e) { ZTC.nets = []; ZTC.err = e.message; }
+  if (page === "net") renderPage();
+}
+async function ztcMembers(id) {
+  try { ZTC.mem[id] = (await api("zt/central/members?id=" + id)).members; } catch (e) { toast(e.message); ZTC.mem[id] = []; }
+  if (page === "net") renderPage();
+}
+function ztcBlock() {
+  const s = S.settings, out = [];
+  if (!s.ztApi) {
+    const tk = h("input", { type: "password", placeholder: t("Токен с my.zerotier.com", "Token from my.zerotier.com"), style: "width:250px", spellcheck: "false" });
+    out.push(plain(row(t("Хозяин сети", "Network owner"), t("Чтобы создать свою сеть и настраивать её здесь, вставьте токен: my.zerotier.com → Account → API Access Tokens → New Token.", "To create and manage your own network here, paste a token: my.zerotier.com → Account → API Access Tokens → New Token."),
+      tk,
+      h("button", { class: "btn pri", onclick: async () => { try { await api("zt/central/token", { token: tk.value.trim() }); await refresh(); ZTC.nets = null; renderPage(); toast(t("Токен принят", "Token accepted")); } catch (e) { toast(e.message); } } }, t("Подключить", "Connect")),
+      h("button", { class: "btn", onclick: () => api("openurl", { url: "https://my.zerotier.com/account" }).catch(e => toast(e.message)) }, t("Получить токен", "Get a token")))));
+    return out;
+  }
+  if (ZTC.nets === null) { ZTC.nets = undefined; ztcLoad(); }
+  const nm = h("input", { type: "text", placeholder: t("Название новой сети", "New network name"), maxlength: 32, style: "width:200px" });
+  out.push(plain(
+    row(t("Моя сеть ZeroTier", "My ZeroTier network"), t("Создаётся закрытая сеть с адресами 10.x.x.x; вы автоматически входите в неё и разрешаетесь.", "A private network with 10.x.x.x addresses is created; you join it and get authorised automatically."),
+      nm, h("button", { class: "btn pri", onclick: async () => { try { await api("zt/central/create", { name: nm.value.trim() }); await refresh(); ZTC.nets = null; ztRefresh(true); renderPage(); toast(t("Сеть создана", "Network created")); } catch (e) { toast(e.message); } } }, t("Создать сеть", "Create network"))),
+    row(t("Токен подключён", "Token connected"), ZTC.err || t("Управление сетями доступно.", "Network management is available."),
+      h("button", { class: "btn", onclick: async () => { await api("zt/central/token", { token: "" }); await refresh(); ZTC = { nets: null, err: "", open: {}, mem: {} }; renderPage(); } }, t("Отключить", "Disconnect")))));
+  for (const n of ZTC.nets || []) {
+    const card = h("div", { class: "netnode", style: "flex-wrap:wrap;gap:8px" });
+    const name = h("input", { type: "text", value: n.name, maxlength: 32, style: "width:170px" });
+    card.append(
+      h("div", { class: "ti", style: "flex:1;min-width:160px" }, h("b", null, n.name || n.id), h("span", null, n.id + (n.subnet ? " · " + n.subnet : "") + " · " + t("участников: ", "members: ") + n.members + (n.online ? " (" + n.online + " " + t("в сети", "online") + ")" : ""))),
+      h("button", { class: "btn", onclick: () => navigator.clipboard.writeText(n.id).then(() => toast(t("ID сети скопирован", "Network ID copied"))) }, t("Копировать ID", "Copy ID")),
+      h("button", { class: "btn", onclick: () => { ZTC.open[n.id] = !ZTC.open[n.id]; if (ZTC.open[n.id]) ztcMembers(n.id); else renderPage(); } }, ZTC.open[n.id] ? t("Скрыть", "Hide") : t("Настроить", "Configure")),
+      h("button", { class: "ib", title: t("Удалить сеть", "Delete network"), onclick: () => modal(t("Удалить сеть?", "Delete the network?"), h("p", null, (n.name || n.id) + " — " + t("сеть исчезнет у всех участников.", "the network disappears for everyone.")), [{ text: t("Отмена", "Cancel") }, { text: t("Удалить", "Delete"), cls: "dng", fn: async () => { try { await api("zt/central/delete", { id: n.id }); await refresh(); ZTC.nets = null; ztRefresh(true); renderPage(); } catch (e) { toast(e.message); } } }]) }, "🗑"));
+    out.push(card);
+    if (ZTC.open[n.id]) {
+      const box = h("div", { class: "pin2", style: "margin:0 0 10px 14px" });
+      box.append(h("div", { class: "row" }, h("div", { class: "l" }, t("Название", "Name")), h("div", { class: "c" }, name, h("button", { class: "btn pri", onclick: async () => { try { await api("zt/central/update", { id: n.id, name: name.value.trim() }); await refresh(); ZTC.nets = null; renderPage(); } catch (e) { toast(e.message); } } }, t("Сохранить", "Save")))));
+      box.append(h("div", { class: "row" }, h("div", { class: "l" }, t("Закрытая сеть", "Private network"), h("small", null, t("Новые участники входят только после вашего разрешения.", "New members join only after you authorise them."))),
+        h("div", { class: "c" }, sw(n.private, async v => { try { await api("zt/central/update", { id: n.id, private: v }); n.private = v; } catch (e) { toast(e.message); } }))));
+      const mems = ZTC.mem[n.id];
+      box.append(h("div", { class: "row" }, h("div", { class: "l" }, t("Участники", "Members")), h("div", { class: "c" }, h("button", { class: "btn", onclick: () => ztcMembers(n.id) }, t("Обновить", "Refresh")))));
+      if (!mems) box.append(h("div", { class: "empty" }, "…"));
+      else if (!mems.length) box.append(h("div", { class: "empty" }, t("Пока никого. Друзья входят по ID сети, затем вы разрешаете их здесь.", "Nobody yet. Friends join with the network ID, then you authorise them here.")));
+      for (const m of mems || []) {
+        box.append(h("div", { class: "row" }, h("div", { class: "l" }, (m.online ? "● " : "○ ") + (m.name || m.node), h("small", null, m.node + (m.ips && m.ips[0] ? " · " + m.ips[0] : ""))),
+          h("div", { class: "c" }, sw(m.authorized, async v => { try { await api("zt/central/auth", { id: n.id, node: m.node, ok: v }); m.authorized = v; } catch (e) { toast(e.message); } }))));
+      }
+      out.push(plain(box));
+    }
+  }
+  return out;
+}
 PAGES.net = () => {
   if (!ZT) { ztRefresh(true).then(ztSchedule); return [h("div", { class: "empty" }, "…")]; }
   if (!ztTimer) ztSchedule();
@@ -983,6 +1037,7 @@ PAGES.net = () => {
   const nm = h("input", { type: "text", placeholder: t("Название", "Name"), maxlength: 24, style: "width:150px" });
   out.push(plain(row(t("Добавить сеть", "Add a network"), t("ID создаёт хозяин сети на my.zerotier.com. После входа хозяин должен разрешить ваш узел.", "The network owner creates the ID on my.zerotier.com. After joining, the owner must authorise your node."),
     id, nm, h("button", { class: "btn pri", onclick: async () => { try { await api("zt/join", { id: id.value.trim(), name: nm.value.trim() }); await refresh(); ztRefresh(true); toast(t("Готово", "Done")); } catch (e) { toast(e.message); } } }, t("Войти", "Join")))));
+  out.push(...ztcBlock());
   const joined = new Map((ZT.nets || []).map(n => [n.id, n]));
   const list = h("div", { style: "margin-top:10px" });
   for (const n of s.ztNets || []) {
