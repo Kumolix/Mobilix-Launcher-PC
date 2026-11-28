@@ -12,8 +12,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 
 	webview2 "github.com/jchv/go-webview2"
@@ -138,58 +140,151 @@ func installZeroTier() error {
 	return err
 }
 
+var shell32 = syscall.NewLazyDLL("shell32.dll")
+
+func isAdmin() bool {
+	r, _, _ := shell32.NewProc("IsUserAnAdmin").Call()
+	return r != 0
+}
+
+// elevate запускает этот же exe с правами администратора (запрос UAC). wait — дождаться завершения.
+func elevate(args string) error {
+	self, _ := os.Executable()
+	verb, _ := syscall.UTF16PtrFromString("runas")
+	file, _ := syscall.UTF16PtrFromString(self)
+	prm, _ := syscall.UTF16PtrFromString(args)
+	r, _, _ := shell32.NewProc("ShellExecuteW").Call(0, uintptr(unsafe.Pointer(verb)), uintptr(unsafe.Pointer(file)), uintptr(unsafe.Pointer(prm)), 0, 0)
+	if r <= 32 {
+		return fmt.Errorf("нет прав администратора (код %d)", r)
+	}
+	return nil
+}
+
+// worker: вторая копия установщика с правами администратора, без окна. Пишет ход работы в файл, который читает окно.
+func worker(launcher, zt bool, status string) {
+	dir := installDir()
+	say := func(line string) {
+		f, err := os.OpenFile(status, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err == nil {
+			f.WriteString(line + "\n")
+			f.Close()
+		}
+	}
+	step := func(p int, m string) { say(fmt.Sprintf("P|%d|%s", p, m)) }
+	var errs []string
+	if launcher {
+		if err := installLauncher(dir, step); err != nil {
+			errs = append(errs, err.Error())
+			launcher = false
+		}
+	}
+	if zt {
+		step(55, "Устанавливаю ZeroTier One…")
+		if err := installZeroTier(); err != nil {
+			errs = append(errs, "ZeroTier One не установился — его можно поставить позже на странице «Игра по сети» в лаунчере.")
+		}
+	}
+	msg := "Всё установлено."
+	if len(errs) > 0 {
+		msg = strings.Join(errs, " ")
+	}
+	say(fmt.Sprintf("D|%t|%t|%s", len(errs) == 0, launcher, msg))
+}
+
 func main() {
 	dir := installDir()
-	if len(os.Args) > 1 && strings.EqualFold(os.Args[1], "/uninstall") {
-		uninstall(dir)
-		return
+	args := os.Args[1:]
+	if len(args) > 0 {
+		switch strings.ToLower(args[0]) {
+		case "/uninstall":
+			if !isAdmin() {
+				_ = elevate("/uninstall")
+				return
+			}
+			uninstall(dir)
+			return
+		case "/do": // /do <L|-> <Z|-> <файл статуса>
+			if len(args) >= 4 {
+				worker(args[1] == "L", args[2] == "Z", args[3])
+			}
+			return
+		case "/legacy":
+			legacy(dir)
+			return
+		}
 	}
 	exe := filepath.Join(dir, exeName)
+	// Окно работает от обычного пользователя (как сам лаунчер) — так WebView2 надёжно создаёт свой каталог данных.
+	// Права администратора запрашиваются только при нажатии «Установить».
+	data, _ := os.MkdirTemp("", "mobilix-setup-")
+	defer os.RemoveAll(data)
 	w := webview2.NewWithOptions(webview2.WebViewOptions{
 		AutoFocus:     true,
-		DataPath:      filepath.Join(os.TempDir(), "mobilix-setup-wv2"),
+		DataPath:      data,
 		WindowOptions: webview2.WindowOptions{Title: "Установка " + appName, Width: 760, Height: 520, IconId: 1, Center: true},
 	})
 	if w == nil {
-		legacy(dir)
+		if isAdmin() {
+			legacy(dir)
+		} else {
+			_ = elevate("/legacy")
+		}
 		return
 	}
 	defer w.Destroy()
 	w.SetSize(760, 520, webview2.HintFixed)
-	step := func(p int, m string) {
-		w.Dispatch(func() { w.Eval(fmt.Sprintf("progress(%d,%q)", p, m)) })
-	}
 	w.Bind("goInfo", func() map[string]any {
 		_, upd := os.Stat(exe)
 		return map[string]any{"dir": dir, "zt": zeroTierPresent(), "upd": upd == nil}
 	})
 	w.Bind("goClose", func() { w.Dispatch(func() { w.Terminate() }) })
 	w.Bind("goLaunch", func() {
-		_ = exec.Command("explorer.exe", exe).Start() // от имени обычного пользователя
+		_ = exec.Command("explorer.exe", exe).Start()
 		w.Dispatch(func() { w.Terminate() })
 	})
 	w.Bind("goInstall", func(launcher, zt bool) {
+		status := filepath.Join(data, "status.txt")
+		flag := func(b bool, c string) string {
+			if b {
+				return c
+			}
+			return "-"
+		}
+		fail := func(m string) {
+			w.Dispatch(func() { w.Eval(fmt.Sprintf("finish(false,%q,false)", m)) })
+		}
+		if err := elevate(fmt.Sprintf(`/do %s %s "%s"`, flag(launcher, "L"), flag(zt, "Z"), status)); err != nil {
+			fail("Для установки нужны права администратора: " + err.Error())
+			return
+		}
 		go func() {
-			var errs []string
-			if launcher {
-				if err := installLauncher(dir, step); err != nil {
-					errs = append(errs, err.Error())
-					launcher = false
+			var pos int64
+			for i := 0; i < 6000; i++ { // до ~30 минут
+				time.Sleep(300 * time.Millisecond)
+				b, err := os.ReadFile(status)
+				if err != nil || int64(len(b)) <= pos {
+					continue
+				}
+				chunk := string(b[pos:])
+				if !strings.HasSuffix(chunk, "\n") {
+					continue
+				}
+				pos = int64(len(b))
+				for _, ln := range strings.Split(strings.TrimSpace(chunk), "\n") {
+					p := strings.SplitN(ln, "|", 4)
+					switch {
+					case p[0] == "P" && len(p) == 3:
+						n, _ := strconv.Atoi(p[1])
+						m := p[2]
+						w.Dispatch(func() { w.Eval(fmt.Sprintf("progress(%d,%q)", n, m)) })
+					case p[0] == "D" && len(p) == 4:
+						ok, l, m := p[1] == "true", p[2] == "true", p[3]
+						w.Dispatch(func() { w.Eval(fmt.Sprintf("progress(100,'Готово');finish(%t,%q,%t)", ok, m, l)) })
+						return
+					}
 				}
 			}
-			if zt {
-				step(55, "Устанавливаю ZeroTier One…")
-				if err := installZeroTier(); err != nil {
-					errs = append(errs, "ZeroTier One не установился — его можно поставить позже на странице «Игра по сети» в лаунчере.")
-				}
-			}
-			step(100, "Готово")
-			msg := "Всё установлено."
-			if len(errs) > 0 {
-				msg = strings.Join(errs, " ")
-			}
-			ok := len(errs) == 0
-			w.Dispatch(func() { w.Eval(fmt.Sprintf("finish(%t,%q,%t)", ok, msg, launcher)) })
+			fail("Установка не ответила. Попробуйте ещё раз.")
 		}()
 	})
 	html := strings.Replace(uiHTML, "__ICON__", "data:image/png;base64,"+base64.StdEncoding.EncodeToString(uiIcon), 1)

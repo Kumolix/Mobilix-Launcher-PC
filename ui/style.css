@@ -47,7 +47,7 @@ canvas.pix { image-rendering:pixelated; display:block; }
 #stage { flex:1; min-height:0; padding:2px 16px 6px; display:flex; gap:16px; container-type:size; }
 #skinCol { height:100%; width:100cqh; display:flex; flex-direction:column; gap:6px; flex:none; }
 #loginTag { position:absolute; top:10px; left:50%; transform:translateX(-50%); z-index:4; font-size:13px; font-weight:600; padding:4px 14px; border-radius:11px; color:var(--accent); background:color-mix(in srgb,var(--drawer) 80%,transparent); border:1px solid color-mix(in srgb,var(--act) 55%,transparent); white-space:nowrap; }
-#right { flex:1; min-width:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:34px; }
+#right { flex:1; min-width:0; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; gap:12px; }
 #skinLoad { position:absolute; inset:0; display:none; align-items:center; justify-content:center; color:var(--dim); font-size:16px; z-index:3; background:color-mix(in srgb,var(--skinBg) 92%,transparent); }
 #skinCard.loading #skinLoad { display:flex; }
 #skinCard.loading #skinView, #skinCard.loading #ground { visibility:hidden; }
@@ -259,7 +259,7 @@ h3.sec { margin:18px 0 6px; font-size:14px; color:var(--dim); font-weight:600; t
 .frows .row { padding:8px 0; }
 
 /* ZeroTier на главном экране: над кнопками версии и «Играть» */
-#ztPanel { width:min(640px,100%); display:flex; flex-direction:column; align-items:center; gap:10px; }
+#ztPanel { flex:1; width:min(640px,100%); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; }
 #ztPanel.hidden { display:none; }
 #ztTitle { font-size:34px; font-weight:600; letter-spacing:.06em; color:var(--text); }
 #ztJoin { background:none; border:0; padding:2px 8px; font:inherit; font-size:17px; color:var(--accent); cursor:pointer; text-decoration:underline; text-underline-offset:3px; }

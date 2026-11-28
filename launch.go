@@ -66,7 +66,8 @@ func (a *App) launch(ctx context.Context, v *Version, s Settings, e Eff, java st
 
 	sep := string(os.PathListSeparator)
 	repl := map[string]string{
-		"auth_player_name": name, "version_name": v.jarID, // Forge: -DignoreList=...,${version_name}.jar — имя jar клиента (иначе он грузится как модуль и ломает запуск) "game_directory": gdir, "assets_root": a.assetsRoot(),
+		// version_name = имя jar клиента: Forge использует его в -DignoreList=...,${version_name}.jar
+		"auth_player_name": name, "version_name": v.jarID, "game_directory": gdir, "assets_root": a.assetsRoot(),
 		"assets_index_name": assetsID, "auth_uuid": uuid, "auth_access_token": token, "clientid": "", "auth_xuid": "",
 		"user_type": utype, "version_type": vtype, "user_properties": "{}", "auth_session": token, "game_assets": gameAssets,
 		"natives_directory": a.nativesDir(v), "launcher_name": "Mobilix", "launcher_version": appVersion,
