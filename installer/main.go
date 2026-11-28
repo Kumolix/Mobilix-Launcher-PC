@@ -38,7 +38,7 @@ var assets embed.FS
 const (
 	appName = "Mobilix Launcher"
 	exeName = "Mobilix-Launcher.exe"
-	regKey  = `HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\MobilixLauncher`
+	regSub  = `Software\Microsoft\Windows\CurrentVersion\Uninstall\MobilixLauncher`
 )
 
 var user32 = syscall.NewLazyDLL("user32.dll")
@@ -69,12 +69,41 @@ func ps(script string) error {
 	return run("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
 }
 
-func installDir() string {
+func pfDir() string {
 	pf := os.Getenv("ProgramFiles")
 	if pf == "" {
 		pf = `C:\Program Files`
 	}
 	return filepath.Join(pf, appName)
+}
+
+// installDir: по умолчанию — для текущего пользователя (права администратора не нужны);
+// если лаунчер уже стоит в Program Files (старые версии), обновляем его там.
+func installDir() string {
+	if _, err := os.Stat(filepath.Join(pfDir(), exeName)); err == nil {
+		return pfDir()
+	}
+	la := os.Getenv("LOCALAPPDATA")
+	if la == "" {
+		return pfDir()
+	}
+	return filepath.Join(la, "Programs", appName)
+}
+
+func isMachine(dir string) bool { return strings.EqualFold(dir, pfDir()) }
+
+func regKeyFor(dir string) string {
+	if isMachine(dir) {
+		return `HKLM\` + regSub
+	}
+	return `HKCU\` + regSub
+}
+
+func shortcutDirs(dir string) string {
+	if isMachine(dir) {
+		return `@([Environment]::GetFolderPath('CommonDesktopDirectory'),[Environment]::GetFolderPath('CommonPrograms'))`
+	}
+	return `@([Environment]::GetFolderPath('Desktop'),[Environment]::GetFolderPath('Programs'))`
 }
 
 func zeroTierPresent() bool {
@@ -107,7 +136,7 @@ func installLauncher(dir string, step func(int, string)) error {
 	}
 	step(35, "Создаю ярлыки…")
 	ps(`$s=New-Object -ComObject WScript.Shell;` +
-		`foreach($p in @([Environment]::GetFolderPath('CommonDesktopDirectory'),[Environment]::GetFolderPath('CommonPrograms'))){` +
+		`foreach($p in ` + shortcutDirs(dir) + `){` +
 		`$l=$s.CreateShortcut((Join-Path $p '` + appName + `.lnk'));$l.TargetPath='` + exe + `';$l.WorkingDirectory='` + dir + `';$l.IconLocation='` + exe + `,0';$l.Save()}`)
 	step(45, "Регистрирую в «Установке и удалении программ»…")
 	for _, kv := range [][]string{
@@ -115,9 +144,9 @@ func installLauncher(dir string, step func(int, string)) error {
 		{"UninstallString", `"` + filepath.Join(dir, "Uninstall.exe") + `" /uninstall`},
 		{"URLInfoAbout", "https://github.com/Kumolix/Mobilix-Launcher-PC"},
 	} {
-		_ = run("reg", "add", regKey, "/v", kv[0], "/t", "REG_SZ", "/d", kv[1], "/f")
+		_ = run("reg", "add", regKeyFor(dir), "/v", kv[0], "/t", "REG_SZ", "/d", kv[1], "/f")
 	}
-	_ = run("reg", "add", regKey, "/v", "NoModify", "/t", "REG_DWORD", "/d", "1", "/f")
+	_ = run("reg", "add", regKeyFor(dir), "/v", "NoModify", "/t", "REG_DWORD", "/d", "1", "/f")
 	return nil
 }
 
@@ -161,8 +190,7 @@ func elevate(args string) error {
 }
 
 // worker: вторая копия установщика с правами администратора, без окна. Пишет ход работы в файл, который читает окно.
-func worker(launcher, zt bool, status string) {
-	dir := installDir()
+func worker(dir string, launcher, zt bool, status string) {
 	say := func(line string) {
 		f, err := os.OpenFile(status, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		if err == nil {
@@ -197,7 +225,10 @@ func main() {
 	if len(args) > 0 {
 		switch strings.ToLower(args[0]) {
 		case "/uninstall":
-			if !isAdmin() {
+			if self, err := os.Executable(); err == nil {
+				dir = filepath.Dir(self)
+			}
+			if isMachine(dir) && !isAdmin() {
 				_ = elevate("/uninstall")
 				return
 			}
@@ -205,7 +236,7 @@ func main() {
 			return
 		case "/do": // /do <L|-> <Z|-> <файл статуса>
 			if len(args) >= 4 {
-				worker(args[1] == "L", args[2] == "Z", args[3])
+				worker(dir, args[1] == "L", args[2] == "Z", args[3])
 			}
 			return
 		case "/legacy":
@@ -244,20 +275,18 @@ func main() {
 	})
 	w.Bind("goInstall", func(launcher, zt bool) {
 		status := filepath.Join(data, "status.txt")
+		machine := isMachine(dir)
+		step := func(p int, m string) {
+			w.Dispatch(func() { w.Eval(fmt.Sprintf("progress(%d,%q)", p, m)) })
+		}
 		flag := func(b bool, c string) string {
 			if b {
 				return c
 			}
 			return "-"
 		}
-		fail := func(m string) {
-			w.Dispatch(func() { w.Eval(fmt.Sprintf("finish(false,%q,false)", m)) })
-		}
-		if err := elevate(fmt.Sprintf(`/do %s %s "%s"`, flag(launcher, "L"), flag(zt, "Z"), status)); err != nil {
-			fail("Для установки нужны права администратора: " + err.Error())
-			return
-		}
-		go func() {
+		// ждём результат элевированного процесса, пересылая его ход работы в окно
+		tail := func() (ok, launcherOK bool, msg string) {
 			var pos int64
 			for i := 0; i < 6000; i++ { // до ~30 минут
 				time.Sleep(300 * time.Millisecond)
@@ -275,16 +304,48 @@ func main() {
 					switch {
 					case p[0] == "P" && len(p) == 3:
 						n, _ := strconv.Atoi(p[1])
-						m := p[2]
-						w.Dispatch(func() { w.Eval(fmt.Sprintf("progress(%d,%q)", n, m)) })
+						step(n, p[2])
 					case p[0] == "D" && len(p) == 4:
-						ok, l, m := p[1] == "true", p[2] == "true", p[3]
-						w.Dispatch(func() { w.Eval(fmt.Sprintf("progress(100,'Готово');finish(%t,%q,%t)", ok, m, l)) })
-						return
+						return p[1] == "true", p[2] == "true", p[3]
 					}
 				}
 			}
-			fail("Установка не ответила. Попробуйте ещё раз.")
+			return false, false, "Установка не ответила. Попробуйте ещё раз."
+		}
+		go func() {
+			var errs []string
+			launcherOK := false
+			if launcher && !machine { // обычная установка для пользователя: права администратора не нужны
+				if err := installLauncher(dir, step); err != nil {
+					errs = append(errs, err.Error())
+				} else {
+					launcherOK = true
+				}
+			}
+			elevLauncher := launcher && machine
+			if elevLauncher || zt {
+				if err := elevate(fmt.Sprintf(`/do %s %s "%s"`, flag(elevLauncher, "L"), flag(zt, "Z"), status)); err != nil {
+					if elevLauncher {
+						errs = append(errs, "Для установки в Program Files нужны права администратора.")
+					} else {
+						errs = append(errs, "ZeroTier One не установлен: для него нужны права администратора. Лаунчер установлен и работает без них; ZeroTier можно поставить позже.")
+					}
+				} else {
+					ok, l, m := tail()
+					if !ok {
+						errs = append(errs, m)
+					}
+					if elevLauncher && l {
+						launcherOK = true
+					}
+				}
+			}
+			step(100, "Готово")
+			msg := "Всё установлено."
+			if len(errs) > 0 {
+				msg = strings.Join(errs, " ")
+			}
+			w.Dispatch(func() { w.Eval(fmt.Sprintf("finish(%t,%q,%t)", len(errs) == 0, msg, launcherOK)) })
 		}()
 	})
 	html := strings.Replace(uiHTML, "__ICON__", "data:image/png;base64,"+base64.StdEncoding.EncodeToString(uiIcon), 1)
@@ -316,8 +377,8 @@ func uninstall(dir string) {
 		return
 	}
 	_ = run("taskkill", "/IM", exeName, "/F")
-	ps(`foreach($p in @([Environment]::GetFolderPath('CommonDesktopDirectory'),[Environment]::GetFolderPath('CommonPrograms'))){Remove-Item (Join-Path $p '` + appName + `.lnk') -ErrorAction SilentlyContinue}`)
-	_ = run("reg", "delete", regKey, "/f")
+	ps(`foreach($p in ` + shortcutDirs(dir) + `){Remove-Item (Join-Path $p '` + appName + `.lnk') -ErrorAction SilentlyContinue}`)
+	_ = run("reg", "delete", regKeyFor(dir), "/f")
 	_ = os.Remove(filepath.Join(dir, exeName))
 	_ = os.Remove(filepath.Join(dir, exeName+".old"))
 	// сам Uninstall.exe и папка удаляются отложенно, после выхода
